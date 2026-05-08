@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/browser"
+	"github.com/PolymuxOrg/midas/browser"
 )
 
 func pageFromContext(bctx *browser.Context) (*browser.Page, error) {

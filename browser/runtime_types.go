@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	snappkg "github.com/carlvincetan/polymux/internal/midas/browser/snapshot"
-	"github.com/carlvincetan/polymux/internal/midas/cdp"
+	snappkg "github.com/PolymuxOrg/midas/browser/snapshot"
+	"github.com/PolymuxOrg/midas/cdp"
 )
 
 type LoadState string

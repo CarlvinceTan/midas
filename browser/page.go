@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/humanize"
+	"github.com/PolymuxOrg/midas/humanize"
 )
 
 var errLoadStateTimeout = errors.New("page load state timeout")

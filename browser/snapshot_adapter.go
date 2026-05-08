@@ -1,6 +1,6 @@
 package browser
 
-import snappkg "github.com/carlvincetan/polymux/internal/midas/browser/snapshot"
+import snappkg "github.com/PolymuxOrg/midas/browser/snapshot"
 
 type snapshotPageAdapter struct {
 	page *Page

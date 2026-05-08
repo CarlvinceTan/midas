@@ -3,7 +3,7 @@ package browser
 import (
 	"context"
 
-	"github.com/carlvincetan/polymux/internal/midas/cdp"
+	"github.com/PolymuxOrg/midas/cdp"
 )
 
 type cdpRootConn struct {

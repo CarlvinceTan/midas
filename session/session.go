@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/browser"
-	"github.com/carlvincetan/polymux/internal/midas/debug"
-	"github.com/carlvincetan/polymux/internal/midas/launch"
+	"github.com/PolymuxOrg/midas/browser"
+	"github.com/PolymuxOrg/midas/debug"
+	"github.com/PolymuxOrg/midas/launch"
 )
 
 type Options struct {

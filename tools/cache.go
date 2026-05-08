@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/browser"
-	"github.com/carlvincetan/polymux/internal/midas/cache"
+	"github.com/PolymuxOrg/midas/browser"
+	"github.com/PolymuxOrg/midas/cache"
 )
 
 type CacheService struct {

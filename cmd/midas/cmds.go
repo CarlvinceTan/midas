@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/browser"
-	"github.com/carlvincetan/polymux/internal/midas/humanize"
-	"github.com/carlvincetan/polymux/internal/midas/launch"
-	"github.com/carlvincetan/polymux/internal/midas/session"
+	"github.com/PolymuxOrg/midas/browser"
+	"github.com/PolymuxOrg/midas/humanize"
+	"github.com/PolymuxOrg/midas/launch"
+	"github.com/PolymuxOrg/midas/session"
 )
 
 func dispatch(ctx context.Context, opts globalOpts, cmd string, args []string) error {

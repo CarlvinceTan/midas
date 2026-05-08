@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/browser"
+	"github.com/PolymuxOrg/midas/browser"
 )
 
 func waitTool(ctx context.Context, bctx *browser.Context, input map[string]any) (Result, error) {

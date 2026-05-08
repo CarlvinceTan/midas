@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/carlvincetan/polymux/internal/midas/browser"
+	"github.com/PolymuxOrg/midas/browser"
 )
 
 type Spec struct {

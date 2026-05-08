@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/cdp"
-	"github.com/carlvincetan/polymux/internal/midas/debug"
+	"github.com/PolymuxOrg/midas/cdp"
+	"github.com/PolymuxOrg/midas/debug"
 )
 
 const defaultFirstTopLevelPageTimeout = 5 * time.Second

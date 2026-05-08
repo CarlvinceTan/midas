@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/carlvincetan/polymux/internal/midas/humanize"
+	"github.com/PolymuxOrg/midas/humanize"
 )
 
 // EnableHumanize turns on humanized input for this Page. Once enabled,

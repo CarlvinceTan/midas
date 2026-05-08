@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/debug"
+	"github.com/PolymuxOrg/midas/debug"
 )
 
 type LaunchLocalOptions struct {

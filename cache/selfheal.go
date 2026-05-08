@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/browser"
+	"github.com/PolymuxOrg/midas/browser"
 )
 
 type HealLogger interface {

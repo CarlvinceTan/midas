@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/browser/dom"
-	"github.com/carlvincetan/polymux/internal/midas/humanize"
+	"github.com/PolymuxOrg/midas/browser/dom"
+	"github.com/PolymuxOrg/midas/humanize"
 )
 
 type Locator struct {

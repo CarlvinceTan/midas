@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/carlvincetan/polymux/internal/midas/browser"
+	"github.com/PolymuxOrg/midas/browser"
 )
 
 func click(ctx context.Context, bctx *browser.Context, input map[string]any) (Result, error) {

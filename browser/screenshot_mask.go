@@ -6,7 +6,7 @@ import (
 	"log"
 	"math"
 	"math/rand"
-	"github.com/carlvincetan/polymux/internal/midas/browser/dom"
+	"github.com/PolymuxOrg/midas/browser/dom"
 	"time"
 )
 

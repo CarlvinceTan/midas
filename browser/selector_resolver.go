@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/carlvincetan/polymux/internal/midas/browser/dom"
+	"github.com/PolymuxOrg/midas/browser/dom"
 )
 
 const selectorUtilityWorldName = "__polymux_selector__"
