@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/carlvincetan/polymux/internal/midas/browser/dom"
+	"github.com/carlvincetan/polymux/internal/midas/humanize"
 )
 
 type Locator struct {
@@ -92,16 +93,17 @@ func (l *Locator) DblClick(ctx context.Context) error {
 }
 
 func (l *Locator) Hover(ctx context.Context) error {
-	elem, release, err := l.resolveElement(ctx)
+	elem, release, err := l.awaitActionable(ctx, DefaultActionabilityOptions())
 	if err != nil {
 		return err
 	}
 	defer release()
-	if !elem.IsVisible() {
-		return notVisibleError(l.selector, l.index, l.frame.frameID)
-	}
 	cx, cy := elem.Centroid()
-	return l.frame.page.Hover(ctx, cx, cy)
+	page := l.frame.page
+	if page.HumanizeEnabled() {
+		return page.performHumanizedHover(ctx, cx, cy)
+	}
+	return page.Hover(ctx, cx, cy)
 }
 
 func (l *Locator) Tap(ctx context.Context) error {
@@ -148,10 +150,28 @@ func (l *Locator) Fill(ctx context.Context, value string) error {
 }
 
 func (l *Locator) Type(ctx context.Context, value string, delay time.Duration) error {
+	page := l.frame.page
+	if page.HumanizeEnabled() {
+		cfg := page.HumanizeConfig()
+		if cfg != nil {
+			if err := humanize.SleepMs(ctx, humanize.RandRange(cfg.FieldSwitchDelay)); err != nil {
+				return err
+			}
+		}
+		// Click rather than focus() so the field activation looks like a
+		// pointer interaction. Locator.Click routes through humanize too.
+		if err := l.Click(ctx); err != nil {
+			return err
+		}
+		if err := humanize.SleepMs(ctx, humanize.Rand(100, 250)); err != nil {
+			return err
+		}
+		return page.performHumanizedType(ctx, value)
+	}
 	if err := l.Focus(ctx); err != nil {
 		return err
 	}
-	return l.frame.page.Type(ctx, value, delay)
+	return page.Type(ctx, value, delay)
 }
 
 func (l *Locator) Press(ctx context.Context, key string) error {
@@ -457,16 +477,28 @@ func (l *Locator) resolveElement(ctx context.Context) (*resolvedElement, func(),
 }
 
 func (l *Locator) clickAtGeometry(ctx context.Context, clickCount int) error {
-	elem, release, err := l.resolveElement(ctx)
+	elem, release, err := l.awaitActionable(ctx, DefaultActionabilityOptions())
 	if err != nil {
 		return err
 	}
 	defer release()
-	if !elem.IsVisible() {
-		return notVisibleError(l.selector, l.index, l.frame.frameID)
+	page := l.frame.page
+	// Humanize handles single-clicks only; double-clicks fall through to the
+	// raw two-press CDP path so the timing between presses stays a single,
+	// consistent value (matching what Page.Click does).
+	if clickCount == 1 && page.HumanizeEnabled() {
+		geom := elem.Geometry()
+		if geom != nil && geom.Width > 0 && geom.Height > 0 {
+			return page.performHumanizedClick(ctx, humanize.Box{
+				X:      geom.X,
+				Y:      geom.Y,
+				Width:  geom.Width,
+				Height: geom.Height,
+			}, elem.IsInput())
+		}
 	}
 	cx, cy := elem.Centroid()
-	return l.frame.page.Click(ctx, cx, cy, clickCount)
+	return page.Click(ctx, cx, cy, clickCount)
 }
 
 func (l *Locator) withResolvedNode(ctx context.Context, fn func(*resolvedNode) error) error {

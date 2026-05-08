@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/carlvincetan/polymux/internal/midas/humanize"
 )
 
 var errLoadStateTimeout = errors.New("page load state timeout")
@@ -35,6 +37,11 @@ type Page struct {
 	navSeq                int64
 	latestNavID           int64
 	selectorHelpers       map[string]map[int64]struct{}
+
+	humanCfg         *humanize.Config
+	humanCursorX     float64
+	humanCursorY     float64
+	humanCursorReady bool
 }
 
 func newPage(conn connLike, session sessionLike, targetID string, tree frameNode) *Page {

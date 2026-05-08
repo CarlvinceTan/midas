@@ -62,6 +62,28 @@ func stubLocatorResolutionWithState(session *fakeSession, objectID string, backe
 					},
 				},
 			})
+		case strings.Contains(fn, "elementFromPoint"):
+			// Actionability check (stability + occlusion). When the element
+			// is visible we tell the caller it's stable and unoccluded so
+			// click tests can proceed straight to Input.dispatchMouseEvent.
+			if !visible {
+				return populateJSONResult(result, map[string]any{
+					"result": map[string]any{
+						"value": map[string]any{"ok": false, "reason": "zero_size"},
+					},
+				})
+			}
+			return populateJSONResult(result, map[string]any{
+				"result": map[string]any{
+					"value": map[string]any{
+						"ok":     true,
+						"x":      float64(10),
+						"y":      float64(20),
+						"width":  float64(40),
+						"height": float64(30),
+					},
+				},
+			})
 		case strings.Contains(fn, "getBoundingClientRect"):
 			if !visible {
 				return populateJSONResult(result, map[string]any{
