@@ -15,6 +15,11 @@ var errLoadStateTimeout = errors.New("page load state timeout")
 
 type DialogListener func(dialog *Dialog)
 
+// MousePosListener is invoked whenever the page dispatches a CDP mouse event
+// (humanized or direct). Listeners receive viewport CSS pixel coordinates and
+// must be safe for concurrent invocation from any goroutine.
+type MousePosListener func(x, y float64)
+
 type Page struct {
 	conn        connLike
 	mainSession sessionLike
@@ -42,6 +47,9 @@ type Page struct {
 	humanCursorX     float64
 	humanCursorY     float64
 	humanCursorReady bool
+
+	mousePosListeners       map[int]MousePosListener
+	nextMousePosListenerID  int
 }
 
 func newPage(conn connLike, session sessionLike, targetID string, tree frameNode) *Page {
@@ -58,9 +66,10 @@ func newPage(conn connLike, session sessionLike, targetID string, tree frameNode
 		},
 		nextFrameOrdinal: 1,
 		currentURL:       tree.Frame.URL,
-		consoleListeners: make(map[int]ConsoleListener),
-		dialogListeners:  make(map[int]DialogListener),
-		selectorHelpers:  make(map[string]map[int64]struct{}),
+		consoleListeners:  make(map[int]ConsoleListener),
+		dialogListeners:   make(map[int]DialogListener),
+		selectorHelpers:   make(map[string]map[int64]struct{}),
+		mousePosListeners: make(map[int]MousePosListener),
 	}
 	if session.ID() != "" {
 		page.sessions[session.ID()] = session

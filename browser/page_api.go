@@ -204,6 +204,7 @@ func (p *Page) Click(ctx context.Context, x, y float64, clickCount int) error {
 	}, nil); err != nil {
 		return err
 	}
+	p.notifyMousePos(x, y)
 	for i := 1; i <= clickCount; i++ {
 		if err := p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
 			"type":       "mousePressed",
@@ -228,23 +229,31 @@ func (p *Page) Click(ctx context.Context, x, y float64, clickCount int) error {
 }
 
 func (p *Page) Hover(ctx context.Context, x, y float64) error {
-	return p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
+	if err := p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
 		"type":   "mouseMoved",
 		"x":      x,
 		"y":      y,
 		"button": "none",
-	}, nil)
+	}, nil); err != nil {
+		return err
+	}
+	p.notifyMousePos(x, y)
+	return nil
 }
 
 func (p *Page) Scroll(ctx context.Context, x, y, deltaX, deltaY float64) error {
-	return p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
+	if err := p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
 		"type":   "mouseWheel",
 		"x":      x,
 		"y":      y,
 		"button": "none",
 		"deltaX": deltaX,
 		"deltaY": deltaY,
-	}, nil)
+	}, nil); err != nil {
+		return err
+	}
+	p.notifyMousePos(x, y)
+	return nil
 }
 
 func (p *Page) DragAndDrop(ctx context.Context, fromX, fromY, toX, toY float64, steps int) error {
@@ -267,15 +276,20 @@ func (p *Page) DragAndDrop(ctx context.Context, fromX, fromY, toX, toY float64, 
 		}, nil); err != nil {
 			return err
 		}
+		p.notifyMousePos(x, y)
 	}
-	return p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
+	if err := p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
 		"type":       "mouseReleased",
 		"x":          toX,
 		"y":          toY,
 		"button":     "left",
 		"buttons":    1,
 		"clickCount": 1,
-	}, nil)
+	}, nil); err != nil {
+		return err
+	}
+	p.notifyMousePos(toX, toY)
+	return nil
 }
 
 func (p *Page) Type(ctx context.Context, text string, delay time.Duration) error {
@@ -549,6 +563,36 @@ func (p *Page) installConsoleBridge(session sessionLike) {
 			listener(msg)
 		}
 	})
+}
+
+// AddMousePosListener registers fn to be called whenever the page records a
+// new cursor position (any humanized or direct CDP mouse event). Returns an
+// unsubscribe function.
+func (p *Page) AddMousePosListener(listener MousePosListener) func() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.nextMousePosListenerID++
+	id := p.nextMousePosListenerID
+	p.mousePosListeners[id] = listener
+	return func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		delete(p.mousePosListeners, id)
+	}
+}
+
+// notifyMousePos snapshots the listener map under the read lock and invokes
+// each one outside the lock so a slow listener can't block CDP dispatch.
+func (p *Page) notifyMousePos(x, y float64) {
+	p.mu.RLock()
+	listeners := make([]MousePosListener, 0, len(p.mousePosListeners))
+	for _, l := range p.mousePosListeners {
+		listeners = append(listeners, l)
+	}
+	p.mu.RUnlock()
+	for _, l := range listeners {
+		l(x, y)
+	}
 }
 
 func (p *Page) AddDialogListener(listener DialogListener) func() {

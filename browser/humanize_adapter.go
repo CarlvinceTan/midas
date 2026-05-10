@@ -56,10 +56,11 @@ func (p *Page) HumanCursor() (x, y float64, ready bool) {
 
 func (p *Page) setHumanCursor(x, y float64) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.humanCursorX = x
 	p.humanCursorY = y
 	p.humanCursorReady = true
+	p.mu.Unlock()
+	p.notifyMousePos(x, y)
 }
 
 // ensureHumanCursor seeds the cursor at a randomized point inside the
@@ -97,12 +98,16 @@ type pageRawMouse struct {
 }
 
 func (m *pageRawMouse) Move(ctx context.Context, x, y float64) error {
-	return m.page.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
+	if err := m.page.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
 		"type":   "mouseMoved",
 		"x":      x,
 		"y":      y,
 		"button": "none",
-	}, nil)
+	}, nil); err != nil {
+		return err
+	}
+	m.page.notifyMousePos(x, y)
+	return nil
 }
 
 func (m *pageRawMouse) Down(ctx context.Context) error {
