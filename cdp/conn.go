@@ -9,7 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 )
 
 type inflight struct {
@@ -29,6 +30,8 @@ type dispatchWaiter struct {
 
 type Conn struct {
 	ws      *websocket.Conn
+	ctx     context.Context
+	cancel  context.CancelFunc
 	writeMu sync.Mutex
 
 	mu            sync.RWMutex
@@ -60,16 +63,29 @@ func Dial(ctx context.Context, wsURL string, opts DialOptions) (*Conn, error) {
 		header.Set("User-Agent", opts.UserAgent)
 	}
 
-	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, wsURL, header)
+	conn, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader:      header,
+		CompressionMode: websocket.CompressionDisabled,
+	})
 	if err != nil {
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
 		return nil, err
 	}
+	// CDP responses can be huge (Network.responseBody on big pages, large
+	// attachedToTarget bursts during navigation). Disable coder's 32 KiB
+	// read cap; the protocol itself bounds message size.
+	conn.SetReadLimit(-1)
+
+	// Connection-scoped context outlives the Dial call's ctx so reads/writes
+	// after Dial returns aren't tied to the dial timeout.
+	connCtx, cancel := context.WithCancel(context.Background())
 
 	c := &Conn{
 		ws:                     conn,
+		ctx:                    connCtx,
+		cancel:                 cancel,
 		inflight:               make(map[int64]*inflight),
 		sessions:               make(map[string]*SessionConn),
 		sessionToTarget:        make(map[string]string),
@@ -268,7 +284,7 @@ func (c *Conn) send(ctx context.Context, sessionID, method string, params any, r
 
 func (c *Conn) readLoop() {
 	for {
-		_, payload, err := c.ws.ReadMessage()
+		_, payload, err := c.ws.Read(c.ctx)
 		if err != nil {
 			c.closeWithReason(readErrorReason(err))
 			return
@@ -420,7 +436,7 @@ func (c *Conn) nextSubscriptionID() uint64 {
 func (c *Conn) writeJSON(payload requestEnvelope) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return c.ws.WriteJSON(payload)
+	return wsjson.Write(c.ctx, c.ws, payload)
 }
 
 func (c *Conn) finishInflight(id int64, result json.RawMessage, err error) {
@@ -507,8 +523,11 @@ func (c *Conn) closeWithReason(reason string) {
 			handler(reason)
 		}
 
+		if c.cancel != nil {
+			c.cancel()
+		}
 		if c.ws != nil {
-			_ = c.ws.Close()
+			_ = c.ws.Close(websocket.StatusNormalClosure, "")
 		}
 	})
 }
@@ -567,11 +586,15 @@ func cdpResponseError(respErr *cdpError) error {
 }
 
 func readErrorReason(err error) string {
-	if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+	// coder/websocket exposes the peer's close status via CloseStatus; a
+	// non-CloseError (TCP reset, ctx cancel, EOF) returns -1.
+	status := websocket.CloseStatus(err)
+	switch {
+	case status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway:
+		return err.Error()
+	case status != -1:
+		return "unexpected close: " + err.Error()
+	default:
 		return err.Error()
 	}
-	if websocket.IsUnexpectedCloseError(err) {
-		return "unexpected close: " + err.Error()
-	}
-	return err.Error()
 }

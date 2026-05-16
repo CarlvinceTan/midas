@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
 )
 
 func TestWaitForWebSocketDebuggerURLAtUsesHostHeader(t *testing.T) {
@@ -44,13 +44,12 @@ func TestWaitForWebSocketDebuggerURLAtUsesHostHeader(t *testing.T) {
 func TestWaitForWebSocketReadySucceeds(t *testing.T) {
 	t.Parallel()
 
-	upgrader := websocket.Upgrader{}
 	server := newHTTPTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 		if err != nil {
 			return
 		}
-		_ = conn.Close()
+		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}))
 	defer server.Close()
 

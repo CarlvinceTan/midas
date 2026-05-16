@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
 
 	"github.com/PolymuxOrg/midas/debug"
 )
@@ -145,14 +145,12 @@ func waitForWebSocketReady(ctx context.Context, wsURL string, deadline time.Time
 }
 
 func probeWebSocket(ctx context.Context, wsURL string, timeout time.Duration) error {
-	dialer := websocket.Dialer{HandshakeTimeout: timeout}
-
 	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	conn, _, err := dialer.DialContext(dialCtx, wsURL, nil)
+	conn, _, err := websocket.Dial(dialCtx, wsURL, nil)
 	if err != nil {
 		return err
 	}
-	return conn.Close()
+	return conn.Close(websocket.StatusNormalClosure, "")
 }

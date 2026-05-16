@@ -8,19 +8,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
 )
 
 func TestLaunchKernelWithDirectWSURL(t *testing.T) {
 	t.Parallel()
 
-	upgrader := websocket.Upgrader{}
 	server := newHTTPTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 		if err != nil {
 			return
 		}
-		_ = conn.Close()
+		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}))
 	defer server.Close()
 
@@ -49,7 +48,6 @@ func TestLaunchKernelWithDirectWSURL(t *testing.T) {
 func TestLaunchKernelLaunchesAndClosesManagedProcess(t *testing.T) {
 	t.Parallel()
 
-	upgrader := websocket.Upgrader{}
 	var wsURL string
 	server := newHTTPTestServerOrSkip(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -57,11 +55,11 @@ func TestLaunchKernelLaunchesAndClosesManagedProcess(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"webSocketDebuggerUrl":"` + wsURL + `"}`))
 		default:
-			conn, err := upgrader.Upgrade(w, r, nil)
+			conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 			if err != nil {
 				return
 			}
-			_ = conn.Close()
+			_ = conn.Close(websocket.StatusNormalClosure, "")
 		}
 	}))
 	defer server.Close()
