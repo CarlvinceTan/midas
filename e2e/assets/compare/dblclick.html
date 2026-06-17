@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head><title>Dblclick</title></head>
+<body>
+  <button id="btn">Double me</button>
+  <div id="result">0</div>
+  <script>
+    window.dbl = 0;
+    document.getElementById('btn').addEventListener('dblclick', () => {
+      window.dbl++;
+      document.getElementById('result').textContent = String(window.dbl);
+    });
+  </script>
+</body>
+</html>

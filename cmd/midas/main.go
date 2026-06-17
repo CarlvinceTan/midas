@@ -24,7 +24,11 @@ Usage: midas [-s=<session>] <command> [args]
 Lifecycle:
   open [url] [--headed]       launch a Chromium and store its WS URL
   attach <ws-url>             register an externally-launched Chromium
-  close                       close the active session
+  daemon                      run a foreground daemon that holds one CDP
+                              connection and serves subsequent commands over a
+                              unix socket (faster + keeps cross-command state;
+                              run in the background). "close" stops it.
+  close                       close the active session (and its daemon)
   list                        list known sessions
   close-all                   close every known session
 
@@ -36,7 +40,12 @@ Navigation:
 
 Mouse:
   click <selector> [--double] perform a click (humanized when --human is set)
+  dblclick <selector>         perform a double click
   hover <selector>            hover over an element
+  check <selector>            check a checkbox or radio button
+  uncheck <selector>          uncheck a checkbox
+  select <selector> <val...>  select option(s) in a dropdown (by value or label)
+  drag <from> <to>            drag one element onto another
   mousemove <x> <y>           move the mouse
   mousewheel <dx> <dy>        dispatch a wheel event
 
@@ -62,7 +71,8 @@ Storage:
                               service workers) across all open tabs
 
 Humanize (per-session toggle, persisted in session file):
-  humanize on|off|careful     enable / disable humanized input
+  humanize on|off             enable / disable humanized input
+                              (on = as fast as possible without looking botlike)
 
 Global flags:
   -s=<session> | --session=<session>   session name (default: "default")

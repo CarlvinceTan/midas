@@ -28,6 +28,13 @@ type dispatchWaiter struct {
 	done      chan error
 }
 
+// queuedEvent is a CDP event awaiting delivery on the dispatch worker.
+type queuedEvent struct {
+	sessionID string
+	event     string
+	params    json.RawMessage
+}
+
 type Conn struct {
 	ws      *websocket.Conn
 	ctx     context.Context
@@ -52,6 +59,16 @@ type Conn struct {
 
 	transportCloseHandlers map[uint64]func(string)
 	closeOnce              sync.Once
+
+	// Event dispatch runs on a dedicated worker goroutine, not the read loop.
+	// A handler that issues a synchronous CDP Send must not block the read
+	// loop, or the response it waits for can never be read (deadlock). The read
+	// loop enqueues events here; eventLoop delivers them in FIFO order so a
+	// blocking handler stalls only later events, never command responses.
+	eventMu     sync.Mutex
+	eventCond   *sync.Cond
+	eventQueue  []queuedEvent
+	eventClosed bool
 }
 
 func Dial(ctx context.Context, wsURL string, opts DialOptions) (*Conn, error) {
@@ -94,8 +111,10 @@ func Dial(ctx context.Context, wsURL string, opts DialOptions) (*Conn, error) {
 		dispatchWaiters:        make(map[uint64]*dispatchWaiter),
 		transportCloseHandlers: make(map[uint64]func(string)),
 	}
+	c.eventCond = sync.NewCond(&c.eventMu)
 
 	go c.readLoop()
+	go c.eventLoop()
 
 	return c, nil
 }
@@ -332,8 +351,45 @@ func (c *Conn) handleMessage(payload []byte) error {
 		c.handleTargetDestroyed(evt)
 	}
 
-	c.dispatchEvent(msg.SessionID, msg.Method, msg.Params)
+	c.enqueueEvent(msg.SessionID, msg.Method, msg.Params)
 	return nil
+}
+
+// enqueueEvent appends an event for the dispatch worker. It never blocks the
+// caller (the read loop): the queue is unbounded, so a slow/blocking handler
+// backs up events here instead of stalling response delivery.
+func (c *Conn) enqueueEvent(sessionID, event string, params json.RawMessage) {
+	c.eventMu.Lock()
+	if c.eventClosed {
+		c.eventMu.Unlock()
+		return
+	}
+	c.eventQueue = append(c.eventQueue, queuedEvent{sessionID: sessionID, event: event, params: params})
+	c.eventCond.Signal()
+	c.eventMu.Unlock()
+}
+
+// eventLoop delivers queued events in FIFO order on its own goroutine. Running
+// off the read loop is what lets an event handler make a synchronous CDP Send:
+// the read loop stays free to receive that Send's response.
+func (c *Conn) eventLoop() {
+	for {
+		c.eventMu.Lock()
+		for len(c.eventQueue) == 0 && !c.eventClosed {
+			c.eventCond.Wait()
+		}
+		if len(c.eventQueue) == 0 && c.eventClosed {
+			c.eventMu.Unlock()
+			return
+		}
+		batch := c.eventQueue
+		c.eventQueue = nil
+		c.eventMu.Unlock()
+
+		for _, ev := range batch {
+			c.dispatchEvent(ev.sessionID, ev.event, ev.params)
+		}
+	}
 }
 
 func (c *Conn) handleAttachedToTarget(evt attachedToTargetEvent) {
@@ -522,6 +578,12 @@ func (c *Conn) closeWithReason(reason string) {
 		for _, handler := range handlers {
 			handler(reason)
 		}
+
+		// Wake the dispatch worker so it drains any queued events and exits.
+		c.eventMu.Lock()
+		c.eventClosed = true
+		c.eventCond.Broadcast()
+		c.eventMu.Unlock()
 
 		if c.cancel != nil {
 			c.cancel()

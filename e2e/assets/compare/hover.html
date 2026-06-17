@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head><title>Hover</title></head>
+<body>
+  <button id="btn">Hover me</button>
+  <div id="result">no</div>
+  <script>
+    document.getElementById('btn').addEventListener('mouseenter', () => {
+      document.getElementById('result').textContent = 'yes';
+    });
+  </script>
+</body>
+</html>

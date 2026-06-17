@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><title>Select test</title></head>
+<body>
+  <select id="single">
+    <option value="apple">Apple</option>
+    <option value="banana">Banana</option>
+    <option value="cherry">Cherry</option>
+  </select>
+  <select id="multi" multiple>
+    <option value="red">Red</option>
+    <option value="green">Green</option>
+    <option value="blue">Blue</option>
+  </select>
+  <script>
+    window.events = [];
+    for (const sel of document.querySelectorAll('select')) {
+      sel.addEventListener('input', () => window.events.push('input'));
+      sel.addEventListener('change', () => window.events.push('change'));
+    }
+  </script>
+</body>
+</html>

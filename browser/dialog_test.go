@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/PolymuxOrg/midas/cdp"
+	"github.com/PolymuxOrg/midas/internal/cdp"
 )
 
 func TestDialogType(t *testing.T) {

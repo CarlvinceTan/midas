@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DnD</title>
+  <style>
+    #src,#dst{width:140px;height:140px;display:inline-block;vertical-align:top}
+    #src{background:#8cf}#dst{background:#fc8}
+  </style>
+</head>
+<body>
+  <div id="src">source</div>
+  <div id="dst">target</div>
+  <div id="result">none</div>
+  <script>
+    // Pointer-based draggable (not HTML5 draggable): press on source, release
+    // on target → "dropped".
+    let down = false;
+    document.getElementById('src').addEventListener('pointerdown', () => down = true);
+    document.getElementById('dst').addEventListener('pointerup', () => {
+      if (down) document.getElementById('result').textContent = 'dropped';
+    });
+    window.addEventListener('pointerup', () => down = false);
+  </script>
+</body>
+</html>

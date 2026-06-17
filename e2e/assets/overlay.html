@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Overlay test</title>
+  <style>
+    #target { position: relative; }
+    .overlay {
+      position: fixed; left: 0; top: 0; right: 0; bottom: 0;
+      background: rgba(255,0,0,0.4); z-index: 100;
+    }
+  </style>
+</head>
+<body>
+  <button id="target" onclick="window.result = 'Clicked'">Covered button</button>
+  <div id="overlay" class="overlay"></div>
+  <script>
+    window.result = 'Was not clicked';
+    // ?temp removes the overlay shortly after load; default keeps it forever.
+    if (location.search.includes('temp')) {
+      setTimeout(() => document.getElementById('overlay').remove(), 600);
+    }
+  </script>
+</body>
+</html>

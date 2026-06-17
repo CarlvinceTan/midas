@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/PolymuxOrg/midas/cdp"
+	"github.com/PolymuxOrg/midas/internal/cdp"
 )
 
 type fakeSession struct {

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head><title>Shadow test</title></head>
+<body>
+  <div id="open-host"></div>
+  <div id="nested-host"></div>
+  <script>
+    window.result = 'Was not clicked';
+
+    const open = document.getElementById('open-host').attachShadow({mode: 'open'});
+    open.innerHTML = '<button id="shadow-button">Shadow button</button>';
+    open.getElementById('shadow-button').addEventListener('click', () => {
+      window.result = 'Shadow clicked';
+    });
+
+    const outer = document.getElementById('nested-host').attachShadow({mode: 'open'});
+    outer.innerHTML = '<div id="inner-host"></div>';
+    const inner = outer.getElementById('inner-host').attachShadow({mode: 'open'});
+    inner.innerHTML = '<input id="nested-input" placeholder="nested">';
+  </script>
+</body>
+</html>

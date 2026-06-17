@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/PolymuxOrg/midas/cdp"
-	"github.com/PolymuxOrg/midas/debug"
+	"github.com/PolymuxOrg/midas/internal/cdp"
+	"github.com/PolymuxOrg/midas/internal/debug"
 )
 
 const defaultFirstTopLevelPageTimeout = 5 * time.Second
@@ -154,9 +154,14 @@ func (c *Context) bootstrap(ctx context.Context) error {
 		_, _ = c.conn.AttachToTarget(ctx, target.TargetID)
 	}
 
+	// Only wait for targets onAttachedToTarget will actually build into pages.
+	// A non-injectable top-level page (the browser's initial chrome://newtab)
+	// is counted by isTopLevelPage but skipped by isNonWebTarget in the attach
+	// handler, so including it here makes bootstrap wait out the full timeout
+	// for a page that never registers.
 	var topLevel []string
 	for _, target := range targets {
-		if isTopLevelPage(target) {
+		if isTopLevelPage(target) && !isNonWebTarget(target) {
 			topLevel = append(topLevel, target.TargetID)
 		}
 	}
@@ -167,12 +172,39 @@ func (c *Context) ensureFirstTopLevelPage(ctx context.Context, timeout time.Dura
 	if c.hasTopLevelPage() {
 		return nil
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	if err := c.waitForFirstTopLevelPage(waitCtx); err == nil {
-		return nil
-	} else if !errors.Is(err, context.DeadlineExceeded) {
-		return err
+
+	// Decide whether to wait for a page to appear or create one immediately.
+	// bootstrap has already awaited any adoptable (web) top-level pages, so if
+	// none registered, check the live target list: when the browser is parked
+	// on a non-adoptable page (e.g. its initial chrome://newtab) and no web
+	// page is present, no page will ever register — create about:blank now
+	// instead of polling the full timeout. Only wait when there is genuinely no
+	// top-level page yet (the connect/launch race) or a web page is still
+	// registering.
+	parkedOnNonWeb := false
+	if targets, err := c.conn.GetTargets(ctx); err == nil {
+		hasWeb, hasNonWeb := false, false
+		for _, t := range targets {
+			if !isTopLevelPage(t) {
+				continue
+			}
+			if isNonWebTarget(t) {
+				hasNonWeb = true
+			} else {
+				hasWeb = true
+			}
+		}
+		parkedOnNonWeb = hasNonWeb && !hasWeb
+	}
+
+	if !parkedOnNonWeb {
+		waitCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if err := c.waitForFirstTopLevelPage(waitCtx); err == nil {
+			return nil
+		} else if !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 	}
 
 	_, err := c.NewPage(ctx, "about:blank")
@@ -215,6 +247,7 @@ func (c *Context) waitForInitialTopLevelTargets(ctx context.Context, targetIDs [
 	for _, id := range targetIDs {
 		pending[id] = struct{}{}
 	}
+	total := len(pending)
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -225,7 +258,13 @@ func (c *Context) waitForInitialTopLevelTargets(ctx context.Context, targetIDs [
 			}
 		}
 		c.mu.RUnlock()
-		if len(pending) == 0 {
+		// Return once every target registered, OR once at least one has — a
+		// usable top-level page is all bootstrap needs, and waiting for ALL of
+		// them lets a single stuck/internal page (e.g. a leftover
+		// chrome://newtab whose createPage never completes) stall the whole
+		// connect for the full timeout. Late tabs still appear via Pages(),
+		// which re-queries the live registry.
+		if len(pending) == 0 || len(pending) < total {
 			return nil
 		}
 		select {
@@ -564,7 +603,7 @@ func (c *Context) cleanupByTarget(targetID string) {
 			delete(c.pendingOOPIFByFrame, fid)
 		}
 	}
-	c.removeFromOrder(targetID)
+	c.removeFromOrderLocked(targetID)
 	delete(c.pagesByTarget, targetID)
 	delete(c.createdAtByTarget, targetID)
 	delete(c.typeByTarget, targetID)
@@ -709,12 +748,6 @@ func (c *Context) pushActive(targetID string) {
 	defer c.mu.Unlock()
 	c.removeFromOrderLocked(targetID)
 	c.pageOrder = append(c.pageOrder, targetID)
-}
-
-func (c *Context) removeFromOrder(targetID string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.removeFromOrderLocked(targetID)
 }
 
 func (c *Context) removeFromOrderLocked(targetID string) {

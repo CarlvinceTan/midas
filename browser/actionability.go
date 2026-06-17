@@ -28,6 +28,14 @@ type ActionabilityOptions struct {
 	SkipStability bool
 	// SkipOcclusion turns off the document.elementFromPoint occlusion check.
 	SkipOcclusion bool
+	// RequireEnabled makes the loop wait until the element is enabled (not
+	// `disabled` and not inside a disabled fieldset). Set by click/dblclick;
+	// matches Playwright's actionability matrix.
+	RequireEnabled bool
+	// RequireEditable makes the loop wait until the element is editable (a
+	// non-readonly, non-disabled input/textarea, or a contenteditable). Set by
+	// fill. Editable implies enabled, so callers need not set both.
+	RequireEditable bool
 	// Disabled bypasses the entire actionability flow — only the existing
 	// resolve + IsVisible check runs.
 	Disabled bool
@@ -76,6 +84,12 @@ func (l *Locator) awaitActionable(ctx context.Context, opts ActionabilityOptions
 		case !elem.IsVisible():
 			release()
 			lastErr = notVisibleError(l.selector, l.index, l.frame.frameID)
+		case opts.RequireEditable && !elem.IsEditable():
+			release()
+			lastErr = notEditableError(l.selector, l.index, l.frame.frameID)
+		case opts.RequireEnabled && !elem.IsEnabled():
+			release()
+			lastErr = notEnabledError(l.selector, l.index, l.frame.frameID)
 		case opts.Disabled:
 			return elem, release, nil
 		default:
@@ -137,11 +151,29 @@ const skipOcclusion = %v;
 const stabilityMs = %d;
 
 const self = this;
+// deepHit descends through shadow roots (open, and closed via the piercer's
+// host->root registry) so the hit-target check resolves to the real element
+// under the point rather than the shadow host returned by elementFromPoint.
+const deepHit = (x, y) => {
+    let el = document.elementFromPoint(x, y);
+    let guard = 0;
+    while (el && guard++ < 64) {
+        let root = el.shadowRoot;
+        if (!root && window.__stagehandV3__ && typeof window.__stagehandV3__.getClosedRoot === "function") {
+            try { root = window.__stagehandV3__.getClosedRoot(el); } catch (e) {}
+        }
+        if (!root || typeof root.elementFromPoint !== "function") break;
+        const inner = root.elementFromPoint(x, y);
+        if (!inner || inner === el) break;
+        el = inner;
+    }
+    return el;
+};
 const finishCheck = (rect, resolve) => {
     if (!skipOcclusion) {
         const cx = rect.left + rect.width / 2;
         const cy = rect.top + rect.height / 2;
-        const hit = document.elementFromPoint(cx, cy);
+        const hit = deepHit(cx, cy);
         if (!hit) {
             resolve({ ok: false, reason: "no_hit" });
             return;

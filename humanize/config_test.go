@@ -6,31 +6,24 @@ import (
 	"time"
 )
 
-func TestDefaultAndCarefulDiverge(t *testing.T) {
-	d := DefaultConfig()
-	c := CarefulConfig()
-
-	if d.TypingDelay >= c.TypingDelay {
-		t.Errorf("careful TypingDelay should be > default; got %v vs %v", c.TypingDelay, d.TypingDelay)
+// TestDefaultConfigHumanFloors pins the human-floor guarantees of the single
+// profile: dwell and click-hold must stay in the human band so dwell-tracking
+// detectors see a genuine hold, and the mouse must trace multiple steps rather
+// than teleport. These are the constraints that keep "as fast as possible" from
+// drifting into "suspiciously fast".
+func TestDefaultConfigHumanFloors(t *testing.T) {
+	c := DefaultConfig()
+	if c.KeyHold[0] < 40 {
+		t.Errorf("KeyHold lower bound %v < 40ms — dwell too short to read as human", c.KeyHold[0])
 	}
-	if d.MouseOvershootChance <= c.MouseOvershootChance {
-		t.Errorf("careful MouseOvershootChance should be < default; got %v vs %v", c.MouseOvershootChance, d.MouseOvershootChance)
+	if c.ClickHoldButton[0] < 40 || c.ClickHoldInput[0] < 40 {
+		t.Errorf("click-hold floors too low: button %v input %v (want ≥40ms)", c.ClickHoldButton[0], c.ClickHoldInput[0])
 	}
-	if d.ScrollPauseSlow[1] >= c.ScrollPauseSlow[1] {
-		t.Errorf("careful ScrollPauseSlow upper bound should be > default; got %v vs %v", c.ScrollPauseSlow, d.ScrollPauseSlow)
+	if c.MouseMinSteps < 5 {
+		t.Errorf("MouseMinSteps %d < 5 — too few points to form a human curve", c.MouseMinSteps)
 	}
-}
-
-func TestResolveConfigPicksPreset(t *testing.T) {
-	if got := ResolveConfig(PresetCareful).TypingDelay; got != CarefulConfig().TypingDelay {
-		t.Errorf("ResolveConfig(careful) TypingDelay = %v, want %v", got, CarefulConfig().TypingDelay)
-	}
-	if got := ResolveConfig(PresetDefault).TypingDelay; got != DefaultConfig().TypingDelay {
-		t.Errorf("ResolveConfig(default) TypingDelay = %v, want %v", got, DefaultConfig().TypingDelay)
-	}
-	// Unknown presets fall back to default.
-	if got := ResolveConfig(Preset("unknown")).TypingDelay; got != DefaultConfig().TypingDelay {
-		t.Errorf("ResolveConfig(unknown) should fall back to default; got %v", got)
+	if !c.PatchCoalesced {
+		t.Error("PatchCoalesced should stay on")
 	}
 }
 

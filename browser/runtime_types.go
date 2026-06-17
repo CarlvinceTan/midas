@@ -6,7 +6,7 @@ import (
 	"time"
 
 	snappkg "github.com/PolymuxOrg/midas/browser/snapshot"
-	"github.com/PolymuxOrg/midas/cdp"
+	"github.com/PolymuxOrg/midas/internal/cdp"
 )
 
 type LoadState string

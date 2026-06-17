@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"strings"
 
+	"github.com/PolymuxOrg/midas/argus"
 	"github.com/PolymuxOrg/midas/browser"
 )
 
@@ -19,12 +20,24 @@ func extract(ctx context.Context, bctx *browser.Context, input map[string]any) (
 		property = "snapshot"
 	}
 	if selector == "" || property == "snapshot" {
-		snapshot, err := page.Snapshot(ctx)
+		// Semantic snapshot via argus when MIDAS_ARGUS_URL is set; any failure
+		// (server down, non-200, capture error) falls through to the heuristic
+		// snapshot below — never hard-fails. See argus/INTEGRATION.md.
+		message := "snapshot captured"
+		snapshot, err := func() (*browser.SnapshotResult, error) {
+			if c := argus.FromEnv(); c.Enabled() {
+				if res, aerr := argus.Snapshot(ctx, page, c); aerr == nil {
+					message = "snapshot captured (argus)"
+					return res, nil
+				}
+			}
+			return page.Snapshot(ctx)
+		}()
 		if err != nil {
 			return Result{}, err
 		}
 		return Result{
-			Message: "snapshot captured",
+			Message: message,
 			Value: map[string]any{
 				"url":            page.URL(),
 				"formatted_tree": snapshot.FormattedTree,

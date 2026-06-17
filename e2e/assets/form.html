@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><title>Form test</title></head>
+<body>
+  <form id="signup" onsubmit="event.preventDefault(); submitted()">
+    <input id="username" name="username" placeholder="username">
+    <input id="email" name="email" type="email" placeholder="email">
+    <input id="password" name="password" type="password" placeholder="password">
+    <select id="country" name="country">
+      <option value="">Pick one</option>
+      <option value="au">Australia</option>
+      <option value="ph">Philippines</option>
+    </select>
+    <input id="agree" name="agree" type="checkbox">
+    <button id="submit" type="submit">Sign up</button>
+  </form>
+  <div id="status">not submitted</div>
+  <script>
+    function submitted() {
+      const form = document.getElementById('signup');
+      document.getElementById('status').textContent =
+        'submitted:' + form.username.value + ':' + form.email.value + ':' + form.country.value;
+    }
+  </script>
+</body>
+</html>

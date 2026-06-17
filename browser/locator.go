@@ -129,19 +129,25 @@ func (l *Locator) Focus(ctx context.Context) error {
 }
 
 func (l *Locator) Fill(ctx context.Context, value string) error {
-	elem, release, err := l.resolveElement(ctx)
+	// Fill's actionability per Playwright/Stagehand: wait for the element to be
+	// visible and editable (which implies enabled). No stability or hit-target
+	// check is needed — fill focuses and sets the value, it does not click.
+	opts := DefaultActionabilityOptions()
+	opts.RequireEditable = true
+	opts.SkipStability = true
+	opts.SkipOcclusion = true
+	elem, release, err := l.awaitActionable(ctx, opts)
 	if err != nil {
 		return err
 	}
 	defer release()
-	if !elem.IsEditable() {
-		return notEditableError(l.selector, l.index, l.frame.frameID)
-	}
 	return elem.node.callFunction(ctx, fmt.Sprintf(`
 		this.focus();
 		this.scrollIntoView({ block: "center", inline: "center" });
-		if ("value" in this) {
-			this.value = %q;
+		if (this.isContentEditable) {
+			this.textContent = %[1]q;
+		} else if ("value" in this) {
+			this.value = %[1]q;
 		}
 		this.dispatchEvent(new Event("input", { bubbles: true }));
 		this.dispatchEvent(new Event("change", { bubbles: true }));
@@ -477,7 +483,9 @@ func (l *Locator) resolveElement(ctx context.Context) (*resolvedElement, func(),
 }
 
 func (l *Locator) clickAtGeometry(ctx context.Context, clickCount int) error {
-	elem, release, err := l.awaitActionable(ctx, DefaultActionabilityOptions())
+	opts := DefaultActionabilityOptions()
+	opts.RequireEnabled = true
+	elem, release, err := l.awaitActionable(ctx, opts)
 	if err != nil {
 		return err
 	}

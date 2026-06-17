@@ -15,16 +15,8 @@ import (
 // magnitudes throughout the package.
 type Range [2]float64
 
-// Preset names a built-in tuning profile.
-type Preset string
-
-const (
-	PresetDefault Preset = "default"
-	PresetCareful Preset = "careful"
-)
-
 // Config is the full set of tunable parameters. Construct via DefaultConfig
-// or CarefulConfig and then mutate fields if you need a custom profile.
+// and then mutate fields if you need a custom profile.
 type Config struct {
 	// Keyboard timing.
 	TypingDelay       float64
@@ -79,31 +71,53 @@ type Config struct {
 	PatchCoalesced bool
 }
 
-// DefaultConfig returns the "default" preset — normal human speeds.
+// DefaultConfig returns the one humanize profile: as fast as possible while
+// staying behaviourally indistinguishable from a real (fast) human. There is a
+// single profile by design — humanize is either on (this) or off.
+//
+// Tuning rule: minimise latency, but never below a human floor on any signal a
+// behavioural scorer reads. Concretely —
+//   - typing lands ~100ms keydown→keydown (a fast typist) with real variance and
+//     the occasional pause, never a flat superhuman stream;
+//   - key dwell (down→up) sits in the human 45–90ms band, so dwell-tracking
+//     detectors see a genuine hold rather than a near-instant tap;
+//   - clicks keep a human-range press-hold (a sub-30ms down→up is a robot tell);
+//   - the mouse traces the fewest steps that still form a curved, wobbled,
+//     occasionally-overshooting path — never a single teleport segment;
+//   - deliberation sleeps that don't aid realism (field-switch delay, frequent
+//     thinking pauses, long settle/burst pauses) are cut hard.
+//
+// "Too fast / too uniform" is as detectable as "too instant": the scorer keys on
+// the *shape* of the timing distribution, not merely whether a delay is non-zero.
 func DefaultConfig() Config {
 	return Config{
-		TypingDelay:       70,
-		TypingDelaySpread: 40,
-		TypingPauseChance: 0.1,
-		TypingPauseRange:  Range{400, 1000},
+		// Typing: ~100ms keydown→keydown (KeyHold + inter-char), human dwell,
+		// real variance, a rare short pause.
+		TypingDelay:       35,
+		TypingDelaySpread: 25,
+		TypingPauseChance: 0.05,
+		TypingPauseRange:  Range{250, 600},
 		ShiftDownDelay:    Range{30, 70},
 		ShiftUpDelay:      Range{20, 50},
-		KeyHold:           Range{15, 35},
-		FieldSwitchDelay:  Range{800, 1500},
+		KeyHold:           Range{45, 90}, // dwell in the human band (was 15–35)
+		FieldSwitchDelay:  Range{150, 400},
 
-		MouseStepsDivisor:    8,
-		MouseMinSteps:        25,
-		MouseMaxSteps:        80,
+		// Mouse: few steps but a genuinely curved, wobbled, occasionally
+		// overshooting path.
+		MouseStepsDivisor:    14,
+		MouseMinSteps:        10,
+		MouseMaxSteps:        40,
 		MouseWobbleMax:       1.5,
 		MouseOvershootChance: 0.15,
 		MouseOvershootPx:     Range{3, 6},
 		MouseBurstSize:       Range{3, 5},
-		MouseBurstPause:      Range{8, 18},
+		MouseBurstPause:      Range{4, 10},
 
-		ClickAimDelayInput:  Range{60, 140},
-		ClickAimDelayButton: Range{80, 200},
-		ClickHoldInput:      Range{40, 100},
-		ClickHoldButton:     Range{60, 150},
+		// Clicks: short aim, human-range press-hold.
+		ClickAimDelayInput:  Range{30, 80},
+		ClickAimDelayButton: Range{40, 100},
+		ClickHoldInput:      Range{50, 100},
+		ClickHoldButton:     Range{60, 120},
 		ClickInputXRange:    Range{0.05, 0.30},
 
 		IdleDriftPx:    3,
@@ -111,54 +125,20 @@ func DefaultConfig() Config {
 
 		ScrollDeltaBase:       Range{80, 130},
 		ScrollDeltaVariance:   0.2,
-		ScrollPauseFast:       Range{60, 150},
-		ScrollPauseSlow:       Range{150, 400},
+		ScrollPauseFast:       Range{40, 90},
+		ScrollPauseSlow:       Range{100, 250},
 		ScrollAccelSteps:      Range{2, 3},
 		ScrollDecelSteps:      Range{2, 3},
 		ScrollOvershootChance: 0.1,
 		ScrollOvershootPx:     Range{50, 150},
-		ScrollSettleDelay:     Range{300, 600},
+		ScrollSettleDelay:     Range{150, 350},
 		ScrollTargetZone:      Range{0.20, 0.80},
-		ScrollPreMoveDelay:    Range{100, 300},
+		ScrollPreMoveDelay:    Range{60, 150},
 
 		InitialCursorX: Range{400, 700},
 		InitialCursorY: Range{45, 60},
 
 		PatchCoalesced: true,
-	}
-}
-
-// CarefulConfig returns the "careful" preset — slower, more deliberate.
-func CarefulConfig() Config {
-	cfg := DefaultConfig()
-	cfg.TypingDelay = 100
-	cfg.TypingDelaySpread = 50
-	cfg.TypingPauseChance = 0.15
-	cfg.TypingPauseRange = Range{500, 1200}
-	cfg.ShiftDownDelay = Range{40, 90}
-	cfg.ShiftUpDelay = Range{30, 70}
-	cfg.KeyHold = Range{20, 45}
-	cfg.FieldSwitchDelay = Range{1000, 2000}
-	cfg.MouseOvershootChance = 0.10
-	cfg.MouseBurstPause = Range{12, 25}
-	cfg.ClickAimDelayInput = Range{80, 180}
-	cfg.ClickAimDelayButton = Range{120, 280}
-	cfg.ClickHoldInput = Range{60, 140}
-	cfg.ClickHoldButton = Range{80, 200}
-	cfg.ScrollPauseFast = Range{100, 200}
-	cfg.ScrollPauseSlow = Range{250, 600}
-	cfg.ScrollSettleDelay = Range{400, 800}
-	cfg.ScrollPreMoveDelay = Range{150, 400}
-	return cfg
-}
-
-// ResolveConfig returns the named preset, falling back to default.
-func ResolveConfig(preset Preset) Config {
-	switch preset {
-	case PresetCareful:
-		return CarefulConfig()
-	default:
-		return DefaultConfig()
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -230,7 +231,7 @@ func TestCloseWithReasonRejectsInflightAndFutureWaiters(t *testing.T) {
 }
 
 func newTestConn() *Conn {
-	return &Conn{
+	c := &Conn{
 		inflight:               make(map[int64]*inflight),
 		sessions:               make(map[string]*SessionConn),
 		sessionToTarget:        make(map[string]string),
@@ -239,4 +240,7 @@ func newTestConn() *Conn {
 		dispatchWaiters:        make(map[uint64]*dispatchWaiter),
 		transportCloseHandlers: make(map[uint64]func(string)),
 	}
+	c.eventCond = sync.NewCond(&c.eventMu)
+	go c.eventLoop()
+	return c
 }

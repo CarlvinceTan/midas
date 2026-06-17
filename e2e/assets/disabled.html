@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>Disabled test</title></head>
+<body>
+  <button id="btn" disabled onclick="window.result = 'Clicked'">Disabled button</button>
+  <script>
+    window.result = 'Was not clicked';
+    // ?enable re-enables the button shortly after load.
+    if (location.search.includes('enable')) {
+      setTimeout(() => document.getElementById('btn').disabled = false, 500);
+    }
+  </script>
+</body>
+</html>

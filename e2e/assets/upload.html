@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>Upload test</title></head>
+<body>
+  <input id="file" type="file">
+  <div id="uploaded"></div>
+  <script>
+    document.getElementById('file').addEventListener('change', event => {
+      const names = Array.from(event.target.files).map(f => f.name).join(',');
+      document.getElementById('uploaded').textContent = 'uploaded:' + names;
+    });
+  </script>
+</body>
+</html>

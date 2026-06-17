@@ -48,8 +48,18 @@ type Page struct {
 	humanCursorY     float64
 	humanCursorReady bool
 
-	mousePosListeners       map[int]MousePosListener
-	nextMousePosListenerID  int
+	// Last dispatched pointer position, tracked so standalone MouseDown/MouseUp
+	// (which carry no coordinates) press where the cursor currently is.
+	lastMouseX float64
+	lastMouseY float64
+
+	mousePosListeners      map[int]MousePosListener
+	nextMousePosListenerID int
+
+	// heldModifiers is the CDP modifier bitmask for keys currently held via
+	// KeyDown (Alt=1, Ctrl=2, Meta=4, Shift=8). KeyPress applies it so that a
+	// KeyDown("Control") + KeyPress("a") sequence dispatches Ctrl+A.
+	heldModifiers int
 }
 
 func newPage(conn connLike, session sessionLike, targetID string, tree frameNode) *Page {
@@ -64,8 +74,8 @@ func newPage(conn connLike, session sessionLike, targetID string, tree frameNode
 		frameOrdinals: map[string]int{
 			tree.Frame.ID: 0,
 		},
-		nextFrameOrdinal: 1,
-		currentURL:       tree.Frame.URL,
+		nextFrameOrdinal:  1,
+		currentURL:        tree.Frame.URL,
 		consoleListeners:  make(map[int]ConsoleListener),
 		dialogListeners:   make(map[int]DialogListener),
 		selectorHelpers:   make(map[string]map[int64]struct{}),

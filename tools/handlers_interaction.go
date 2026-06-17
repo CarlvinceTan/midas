@@ -132,6 +132,68 @@ func dragAndDrop(ctx context.Context, bctx *browser.Context, input map[string]an
 	}, nil
 }
 
+func check(ctx context.Context, bctx *browser.Context, input map[string]any) (Result, error) {
+	page, err := pageFromContext(bctx)
+	if err != nil {
+		return Result{}, err
+	}
+	selector := stringArg(input, "selector")
+	if selector == "" {
+		return Result{}, fmt.Errorf("check requires selector")
+	}
+	if err := page.Locator(selector).Check(ctx); err != nil {
+		return Result{}, err
+	}
+	return Result{Message: "checked", Value: map[string]any{"selector": selector}}, nil
+}
+
+func uncheck(ctx context.Context, bctx *browser.Context, input map[string]any) (Result, error) {
+	page, err := pageFromContext(bctx)
+	if err != nil {
+		return Result{}, err
+	}
+	selector := stringArg(input, "selector")
+	if selector == "" {
+		return Result{}, fmt.Errorf("uncheck requires selector")
+	}
+	if err := page.Locator(selector).Uncheck(ctx); err != nil {
+		return Result{}, err
+	}
+	return Result{Message: "unchecked", Value: map[string]any{"selector": selector}}, nil
+}
+
+func selectOption(ctx context.Context, bctx *browser.Context, input map[string]any) (Result, error) {
+	page, err := pageFromContext(bctx)
+	if err != nil {
+		return Result{}, err
+	}
+	selector := stringArg(input, "selector")
+	if selector == "" {
+		return Result{}, fmt.Errorf("select requires selector")
+	}
+	var values []string
+	switch v := input["values"].(type) {
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				values = append(values, s)
+			}
+		}
+	case []string:
+		values = v
+	}
+	if s := stringArg(input, "value"); s != "" {
+		values = append(values, s)
+	}
+	if len(values) == 0 {
+		return Result{}, fmt.Errorf("select requires value or values")
+	}
+	if err := page.Locator(selector).SelectOption(ctx, values...); err != nil {
+		return Result{}, err
+	}
+	return Result{Message: "option selected", Value: map[string]any{"selector": selector, "values": values}}, nil
+}
+
 func clickAndHold(ctx context.Context, bctx *browser.Context, input map[string]any) (Result, error) {
 	page, err := pageFromContext(bctx)
 	if err != nil {
@@ -164,4 +226,34 @@ func keys(ctx context.Context, bctx *browser.Context, input map[string]any) (Res
 		return Result{}, err
 	}
 	return Result{Message: "key pressed", Value: map[string]any{"key": key}}, nil
+}
+
+func keyDown(ctx context.Context, bctx *browser.Context, input map[string]any) (Result, error) {
+	page, err := pageFromContext(bctx)
+	if err != nil {
+		return Result{}, err
+	}
+	key := stringArg(input, "key")
+	if key == "" {
+		return Result{}, fmt.Errorf("key_down requires key")
+	}
+	if err := page.KeyDown(ctx, key); err != nil {
+		return Result{}, err
+	}
+	return Result{Message: "key down", Value: map[string]any{"key": key}}, nil
+}
+
+func keyUp(ctx context.Context, bctx *browser.Context, input map[string]any) (Result, error) {
+	page, err := pageFromContext(bctx)
+	if err != nil {
+		return Result{}, err
+	}
+	key := stringArg(input, "key")
+	if key == "" {
+		return Result{}, fmt.Errorf("key_up requires key")
+	}
+	if err := page.KeyUp(ctx, key); err != nil {
+		return Result{}, err
+	}
+	return Result{Message: "key up", Value: map[string]any{"key": key}}, nil
 }

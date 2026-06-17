@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/PolymuxOrg/midas/browser"
-	"github.com/PolymuxOrg/midas/debug"
+	"github.com/PolymuxOrg/midas/internal/debug"
 	"github.com/PolymuxOrg/midas/launch"
 )
 

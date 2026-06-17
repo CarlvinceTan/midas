@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -15,6 +16,12 @@ import (
 	"github.com/PolymuxOrg/midas/launch"
 	"github.com/PolymuxOrg/midas/session"
 )
+
+// stdout is where command result output is written. It is os.Stdout for normal
+// one-shot CLI invocations; the daemon swaps it per request to capture a
+// command's output and stream it back over the socket. Daemon commands are
+// serialized, so a single shared writer is safe.
+var stdout io.Writer = os.Stdout
 
 func dispatch(ctx context.Context, opts globalOpts, cmd string, args []string) error {
 	switch cmd {
@@ -30,9 +37,18 @@ func dispatch(ctx context.Context, opts globalOpts, cmd string, args []string) e
 		return cmdCloseAll(ctx)
 	case "humanize":
 		return cmdHumanizeToggle(opts.Session, args)
+	case "daemon":
+		return cmdDaemon(ctx, opts.Session, args)
 	}
 
-	// Everything below requires an attached session.
+	// If a daemon is serving this session, route the command to it: it holds a
+	// live CDP connection (no per-command re-attach) and persists state across
+	// commands (active tab, held modifiers, dialog listeners).
+	if daemonReachable(opts.Session) {
+		return sendToDaemon(opts.Session, cmd, args, opts.Human)
+	}
+
+	// Otherwise attach statelessly for this one command.
 	rec, err := loadSession(opts.Session)
 	if err != nil {
 		return err
@@ -42,7 +58,13 @@ func dispatch(ctx context.Context, opts globalOpts, cmd string, args []string) e
 		return err
 	}
 	defer sess.Close()
+	return runPageCommand(ctx, sess, rec, cmd, args, opts.Human)
+}
 
+// runPageCommand resolves the active page on sess and executes one page-scoped
+// command. Shared by the stateless one-shot path and the daemon (which passes
+// the same long-lived session for every command).
+func runPageCommand(ctx context.Context, sess *session.Session, rec SessionRecord, cmd string, args []string, human bool) error {
 	page := sess.Context().ActivePage()
 	if page == nil {
 		// Some commands (goto, eval) implicitly need a page; create one.
@@ -55,7 +77,7 @@ func dispatch(ctx context.Context, opts globalOpts, cmd string, args []string) e
 
 	// Apply per-session humanize state, plus optional --human override.
 	if rec.Name != "" {
-		applyHumanizePref(page, rec, opts.Human)
+		applyHumanizePref(page, rec, human)
 	}
 
 	switch cmd {
@@ -73,6 +95,14 @@ func dispatch(ctx context.Context, opts globalOpts, cmd string, args []string) e
 		return cmdDblClick(ctx, page, args)
 	case "hover":
 		return cmdHover(ctx, page, args)
+	case "check":
+		return cmdCheck(ctx, page, args)
+	case "uncheck":
+		return cmdUncheck(ctx, page, args)
+	case "select":
+		return cmdSelect(ctx, page, args)
+	case "drag":
+		return cmdDrag(ctx, page, args)
 	case "mousemove":
 		return cmdMouseMove(ctx, page, args)
 	case "mousewheel":
@@ -132,7 +162,12 @@ func cmdOpen(ctx context.Context, name string, args []string) error {
 		opts.ChromePath = cp
 	}
 
-	result, err := launch.LaunchLocalChrome(ctx, opts)
+	// Launch with a detached context, NOT the command's ctx. LaunchLocalChrome
+	// uses exec.CommandContext, which kills the browser when the context is
+	// cancelled — and this command's ctx is cancelled the instant the CLI
+	// exits. Binding chromium to it would defeat the whole point of `open`
+	// (a browser that survives for later commands to attach to).
+	result, err := launch.LaunchLocalChrome(context.Background(), opts)
 	if err != nil {
 		return fmt.Errorf("launch browser: %w", err)
 	}
@@ -183,7 +218,7 @@ func cmdOpen(ctx context.Context, name string, args []string) error {
 	if err := saveSession(rec); err != nil {
 		return err
 	}
-	fmt.Printf("opened session %q (ws=%s pid=%d)\n", name, result.WS, pid)
+	fmt.Fprintf(stdout, "opened session %q (ws=%s pid=%d)\n", name, result.WS, pid)
 	return nil
 }
 
@@ -199,11 +234,14 @@ func cmdAttach(_ context.Context, name string, args []string) error {
 	if err := saveSession(rec); err != nil {
 		return err
 	}
-	fmt.Printf("attached session %q (ws=%s)\n", name, rec.WSURL)
+	fmt.Fprintf(stdout, "attached session %q (ws=%s)\n", name, rec.WSURL)
 	return nil
 }
 
 func cmdClose(ctx context.Context, name string) error {
+	// Stop a daemon serving this session first, so it releases the CDP
+	// connection before we reap the browser.
+	stopDaemon(name)
 	rec, err := loadSession(name)
 	if err != nil {
 		return err
@@ -225,7 +263,7 @@ func cmdClose(ctx context.Context, name string) error {
 	if err := deleteSession(name); err != nil {
 		return err
 	}
-	fmt.Printf("closed session %q\n", name)
+	fmt.Fprintf(stdout, "closed session %q\n", name)
 	return nil
 }
 
@@ -235,11 +273,11 @@ func cmdList() error {
 		return err
 	}
 	if len(recs) == 0 {
-		fmt.Println("(no sessions)")
+		fmt.Fprintln(stdout, "(no sessions)")
 		return nil
 	}
 	for _, r := range recs {
-		fmt.Printf("%-20s ws=%s pid=%d created=%s\n", r.Name, r.WSURL, r.ChromePID, r.CreatedAt.Format(time.RFC3339))
+		fmt.Fprintf(stdout, "%-20s ws=%s pid=%d created=%s\n", r.Name, r.WSURL, r.ChromePID, r.CreatedAt.Format(time.RFC3339))
 	}
 	return nil
 }
@@ -266,9 +304,9 @@ func cmdGoto(ctx context.Context, page *browser.Page, args []string) error {
 		return err
 	}
 	if resp != nil {
-		fmt.Printf("loaded %s status=%d\n", page.URL(), resp.Status())
+		fmt.Fprintf(stdout, "loaded %s status=%d\n", page.URL(), resp.Status())
 	} else {
-		fmt.Printf("loaded %s\n", page.URL())
+		fmt.Fprintf(stdout, "loaded %s\n", page.URL())
 	}
 	return nil
 }
@@ -326,6 +364,58 @@ func cmdHover(ctx context.Context, page *browser.Page, args []string) error {
 		return fmt.Errorf("hover requires a selector")
 	}
 	return page.Locator(args[0]).Hover(ctx)
+}
+
+func cmdCheck(ctx context.Context, page *browser.Page, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("check requires a selector")
+	}
+	if err := page.Locator(args[0]).Check(ctx); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "checked %s\n", args[0])
+	return nil
+}
+
+func cmdUncheck(ctx context.Context, page *browser.Page, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("uncheck requires a selector")
+	}
+	if err := page.Locator(args[0]).Uncheck(ctx); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "unchecked %s\n", args[0])
+	return nil
+}
+
+func cmdSelect(ctx context.Context, page *browser.Page, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("select requires <selector> <value> [value...]")
+	}
+	if err := page.Locator(args[0]).SelectOption(ctx, args[1:]...); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "selected %v in %s\n", args[1:], args[0])
+	return nil
+}
+
+func cmdDrag(ctx context.Context, page *browser.Page, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("drag requires <from-selector> <to-selector>")
+	}
+	from, err := page.Locator(args[0]).Centroid(ctx)
+	if err != nil {
+		return fmt.Errorf("drag: resolve from %q: %w", args[0], err)
+	}
+	to, err := page.Locator(args[1]).Centroid(ctx)
+	if err != nil {
+		return fmt.Errorf("drag: resolve to %q: %w", args[1], err)
+	}
+	if err := page.DragAndDrop(ctx, from.X, from.Y, to.X, to.Y, 8); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "dragged %s to %s\n", args[0], args[1])
+	return nil
 }
 
 func cmdMouseMove(ctx context.Context, page *browser.Page, args []string) error {
@@ -402,20 +492,22 @@ func cmdKeyDown(ctx context.Context, page *browser.Page, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("keydown requires a key")
 	}
-	return page.SendCDP(ctx, "Input.dispatchKeyEvent", map[string]any{
-		"type": "keyDown",
-		"key":  args[0],
-	}, nil)
+	if err := page.KeyDown(ctx, args[0]); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "keydown %s\n", args[0])
+	return nil
 }
 
 func cmdKeyUp(ctx context.Context, page *browser.Page, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("keyup requires a key")
 	}
-	return page.SendCDP(ctx, "Input.dispatchKeyEvent", map[string]any{
-		"type": "keyUp",
-		"key":  args[0],
-	}, nil)
+	if err := page.KeyUp(ctx, args[0]); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "keyup %s\n", args[0])
+	return nil
 }
 
 // ---------------------------------------------------------------- capture
@@ -425,7 +517,7 @@ func cmdSnapshot(ctx context.Context, page *browser.Page) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(res.FormattedTree)
+	fmt.Fprintln(stdout, res.FormattedTree)
 	return nil
 }
 
@@ -462,7 +554,7 @@ func cmdEval(ctx context.Context, page *browser.Page, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(string(out))
+	fmt.Fprintln(stdout, string(out))
 	return nil
 }
 
@@ -511,13 +603,13 @@ func cmdWaitFor(ctx context.Context, page *browser.Page, args []string) error {
 // cmdDeleteData wipes browsing data from the attached browser without
 // restarting it. Three layers:
 //
-//   1. Browser-wide: Network.clearBrowserCookies + Network.clearBrowserCache
-//   2. Per-origin persistent storage via Storage.clearDataForOrigin
-//      (localStorage, IndexedDB, service workers, cache storage, etc.)
-//      across every origin currently loaded in any tab
-//   3. Per-page sessionStorage cleared via JS — CDP's Storage domain doesn't
-//      cover sessionStorage because it's in-memory tab-scoped state, not a
-//      persistent profile artifact
+//  1. Browser-wide: Network.clearBrowserCookies + Network.clearBrowserCache
+//  2. Per-origin persistent storage via Storage.clearDataForOrigin
+//     (localStorage, IndexedDB, service workers, cache storage, etc.)
+//     across every origin currently loaded in any tab
+//  3. Per-page sessionStorage cleared via JS — CDP's Storage domain doesn't
+//     cover sessionStorage because it's in-memory tab-scoped state, not a
+//     persistent profile artifact
 //
 // `about:blank` / empty origins are skipped because Storage.clearDataForOrigin
 // rejects them.
@@ -565,7 +657,7 @@ func cmdDeleteData(ctx context.Context, bctx *browser.Context, page *browser.Pag
 		_ = p.Evaluate(ctx, "(() => { try { sessionStorage.clear(); } catch (_) {} return null; })()", nil)
 	}
 
-	fmt.Printf("cleared cookies + cache; cleared storage for %d origin(s) across %d tab(s)\n", cleared, len(pages))
+	fmt.Fprintf(stdout, "cleared cookies + cache; cleared storage for %d origin(s) across %d tab(s)\n", cleared, len(pages))
 	return nil
 }
 
@@ -584,28 +676,25 @@ func cmdHumanizeToggle(name string, args []string) error {
 	if err := saveSession(rec); err != nil {
 		return err
 	}
-	fmt.Printf("humanize=%s for session %q\n", mode, name)
+	fmt.Fprintf(stdout, "humanize=%s for session %q\n", mode, name)
 	return nil
 }
 
 // applyHumanizePref enables / disables humanize on the page based on the
-// session record. The --human one-shot flag overrides "off" upward to
-// "default" but never downgrades.
+// session record. Humanize is a single on/off profile; the --human one-shot
+// flag turns it on for this command. Any non-empty, non-"off" value (including
+// legacy "default"/"fast"/"careful" persisted in older session files) means on.
 func applyHumanizePref(page *browser.Page, rec SessionRecord, oneShot bool) {
 	mode := rec.Humanize
-	if oneShot && (mode == "" || mode == "off") {
+	if oneShot {
 		mode = "on"
 	}
-	switch mode {
-	case "on", "default":
-		cfg := humanize.DefaultConfig()
-		page.EnableHumanize(&cfg)
-	case "careful":
-		cfg := humanize.CarefulConfig()
-		page.EnableHumanize(&cfg)
-	default:
+	if mode == "" || mode == "off" {
 		page.EnableHumanize(nil)
+		return
 	}
+	cfg := humanize.DefaultConfig()
+	page.EnableHumanize(&cfg)
 }
 
 // ---------------------------------------------------------------- attach

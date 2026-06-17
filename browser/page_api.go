@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	snappkg "github.com/PolymuxOrg/midas/browser/snapshot"
 	"github.com/PolymuxOrg/midas/browser/dom"
+	snappkg "github.com/PolymuxOrg/midas/browser/snapshot"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -260,7 +260,26 @@ func (p *Page) DragAndDrop(ctx context.Context, fromX, fromY, toX, toY float64, 
 	if steps <= 0 {
 		steps = 1
 	}
-	if err := p.Click(ctx, fromX, fromY, 1); err != nil {
+	// A drag is press-at-source → move-while-held → release-at-target. Move to
+	// the source first, then press WITHOUT releasing (a full click here would
+	// drop the button before the move, so nothing would actually be dragged).
+	if err := p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type":   "mouseMoved",
+		"x":      fromX,
+		"y":      fromY,
+		"button": "none",
+	}, nil); err != nil {
+		return err
+	}
+	p.notifyMousePos(fromX, fromY)
+	if err := p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type":       "mousePressed",
+		"x":          fromX,
+		"y":          fromY,
+		"button":     "left",
+		"buttons":    1,
+		"clickCount": 1,
+	}, nil); err != nil {
 		return err
 	}
 	for i := 1; i <= steps; i++ {
@@ -283,7 +302,7 @@ func (p *Page) DragAndDrop(ctx context.Context, fromX, fromY, toX, toY float64, 
 		"x":          toX,
 		"y":          toY,
 		"button":     "left",
-		"buttons":    1,
+		"buttons":    0,
 		"clickCount": 1,
 	}, nil); err != nil {
 		return err
@@ -337,9 +356,137 @@ var namedKeyCDP = map[string]struct {
 	"End":        {"End", 35},
 	"PageUp":     {"PageUp", 33},
 	"PageDown":   {"PageDown", 34},
+	"Shift":      {"ShiftLeft", 16},
+	"Control":    {"ControlLeft", 17},
+	"Alt":        {"AltLeft", 18},
+	"Meta":       {"MetaLeft", 91},
+}
+
+// printableKeyCode returns the CDP `code` and virtual key code for a single
+// ASCII letter or digit. Chrome's keyboard-shortcut handling (e.g. Control+A
+// select-all) keys off windowsVirtualKeyCode, not the `key` field, so these
+// must be set for combos and for accurate key events generally.
+func printableKeyCode(key string) (string, int, bool) {
+	if len(key) != 1 {
+		return "", 0, false
+	}
+	c := key[0]
+	switch {
+	case c >= 'a' && c <= 'z':
+		up := c - ('a' - 'A')
+		return "Key" + string(up), int(up), true
+	case c >= 'A' && c <= 'Z':
+		return "Key" + string(c), int(c), true
+	case c >= '0' && c <= '9':
+		return "Digit" + string(c), int(c), true
+	}
+	return "", 0, false
+}
+
+// modifierBit returns the CDP modifier bitmask bit for a modifier key name, or
+// 0 for non-modifier keys. CDP bits: Alt=1, Control=2, Meta=4, Shift=8.
+func modifierBit(key string) int {
+	switch key {
+	case "Alt":
+		return 1
+	case "Control":
+		return 2
+	case "Meta":
+		return 4
+	case "Shift":
+		return 8
+	default:
+		return 0
+	}
+}
+
+// KeyDown presses a key without releasing it. For modifier keys (Shift,
+// Control, Alt, Meta) it records the held modifier so later KeyPress/KeyDown
+// events carry the right modifier bitmask — this is what makes combos such as
+// Control+A work.
+func (p *Page) KeyDown(ctx context.Context, key string) error {
+	bit := modifierBit(key)
+	p.mu.Lock()
+	if bit != 0 {
+		p.heldModifiers |= bit
+	}
+	mods := p.heldModifiers
+	p.mu.Unlock()
+
+	evType := "keyDown"
+	if utf8.RuneCountInString(key) != 1 {
+		evType = "rawKeyDown"
+	}
+	ev := map[string]any{"type": evType, "key": key, "modifiers": mods}
+	if d, ok := namedKeyCDP[key]; ok {
+		ev["code"] = d.Code
+		ev["windowsVirtualKeyCode"] = d.VK
+		ev["nativeVirtualKeyCode"] = d.VK
+	} else if code, vk, ok := printableKeyCode(key); ok {
+		ev["code"] = code
+		ev["windowsVirtualKeyCode"] = vk
+		ev["nativeVirtualKeyCode"] = vk
+		if mods&^8 == 0 {
+			// No command modifier held: carry text so the key types.
+			ev["text"] = key
+			ev["unmodifiedText"] = key
+		}
+	}
+	return p.mainSession.Send(ctx, "Input.dispatchKeyEvent", ev, nil)
+}
+
+// KeyUp releases a key previously pressed with KeyDown, clearing its modifier
+// bit if it is a modifier key.
+func (p *Page) KeyUp(ctx context.Context, key string) error {
+	bit := modifierBit(key)
+	p.mu.Lock()
+	if bit != 0 {
+		p.heldModifiers &^= bit
+	}
+	mods := p.heldModifiers
+	p.mu.Unlock()
+
+	ev := map[string]any{"type": "keyUp", "key": key, "modifiers": mods}
+	if d, ok := namedKeyCDP[key]; ok {
+		ev["code"] = d.Code
+		ev["windowsVirtualKeyCode"] = d.VK
+		ev["nativeVirtualKeyCode"] = d.VK
+	}
+	return p.mainSession.Send(ctx, "Input.dispatchKeyEvent", ev, nil)
+}
+
+// parseKeyCombo splits a "Mod+Mod+Key" combo (e.g. "Control+a",
+// "Control+Shift+T") into a modifier bitmask and the final key. Inputs that
+// aren't a clean combo (a literal "+", a trailing "+", or a non-modifier
+// prefix) are returned unchanged with a zero bitmask.
+func parseKeyCombo(key string) (int, string) {
+	if key == "+" || !strings.Contains(key, "+") {
+		return 0, key
+	}
+	parts := strings.Split(key, "+")
+	final := parts[len(parts)-1]
+	if final == "" {
+		return 0, key
+	}
+	mods := 0
+	for _, m := range parts[:len(parts)-1] {
+		b := modifierBit(m)
+		if b == 0 {
+			return 0, key
+		}
+		mods |= b
+	}
+	return mods, final
 }
 
 func (p *Page) KeyPress(ctx context.Context, key string) error {
+	// Parse single-call combos ("Control+a") and fold in any modifiers held via
+	// KeyDown, so the final key is dispatched with the right bitmask.
+	comboMods, key := parseKeyCombo(key)
+	p.mu.RLock()
+	mods := p.heldModifiers | comboMods
+	p.mu.RUnlock()
+
 	// Enter requires rawKeyDown → char(\r) → keyUp for form submission (devtools-protocol #45).
 	if key == "Enter" {
 		const vk = 13
@@ -378,8 +525,8 @@ func (p *Page) KeyPress(ctx context.Context, key string) error {
 	if utf8.RuneCountInString(key) != 1 {
 		downType = "rawKeyDown"
 	}
-	down := map[string]any{"type": downType, "key": key}
-	up := map[string]any{"type": "keyUp", "key": key}
+	down := map[string]any{"type": downType, "key": key, "modifiers": mods}
+	up := map[string]any{"type": "keyUp", "key": key, "modifiers": mods}
 	if d, ok := namedKeyCDP[key]; ok {
 		down["code"] = d.Code
 		down["windowsVirtualKeyCode"] = d.VK
@@ -387,6 +534,23 @@ func (p *Page) KeyPress(ctx context.Context, key string) error {
 		up["code"] = d.Code
 		up["windowsVirtualKeyCode"] = d.VK
 		up["nativeVirtualKeyCode"] = d.VK
+	} else if code, vk, ok := printableKeyCode(key); ok {
+		// Set code + virtual key code so keyboard shortcuts resolve (Chrome keys
+		// Control+A off the VK, not the `key` field).
+		down["code"] = code
+		down["windowsVirtualKeyCode"] = vk
+		down["nativeVirtualKeyCode"] = vk
+		up["code"] = code
+		up["windowsVirtualKeyCode"] = vk
+		up["nativeVirtualKeyCode"] = vk
+		if mods&^8 == 0 {
+			// No command modifier (Ctrl/Alt/Meta) held: Chrome only inserts text
+			// (and fires keypress/input) when keyDown carries `text`. With a
+			// command modifier held this is a shortcut (e.g. Control+A), so we
+			// omit text and let the VK + bitmask drive it.
+			down["text"] = key
+			down["unmodifiedText"] = key
+		}
 	}
 	if err := p.mainSession.Send(ctx, "Input.dispatchKeyEvent", down, nil); err != nil {
 		return err
@@ -584,15 +748,56 @@ func (p *Page) AddMousePosListener(listener MousePosListener) func() {
 // notifyMousePos snapshots the listener map under the read lock and invokes
 // each one outside the lock so a slow listener can't block CDP dispatch.
 func (p *Page) notifyMousePos(x, y float64) {
-	p.mu.RLock()
+	p.mu.Lock()
+	p.lastMouseX = x
+	p.lastMouseY = y
 	listeners := make([]MousePosListener, 0, len(p.mousePosListeners))
 	for _, l := range p.mousePosListeners {
 		listeners = append(listeners, l)
 	}
-	p.mu.RUnlock()
+	p.mu.Unlock()
 	for _, l := range listeners {
 		l(x, y)
 	}
+}
+
+// MouseDown presses a mouse button at the current pointer position — the last
+// place a move/hover/click left the cursor. Provided so callers can compose a
+// held-button drag by hand (mousemove → mousedown → mousemove… → mouseup),
+// mirroring the standalone mousedown primitive in playwright-cli. An empty
+// button defaults to "left".
+func (p *Page) MouseDown(ctx context.Context, button string) error {
+	if button == "" {
+		button = "left"
+	}
+	p.mu.RLock()
+	x, y := p.lastMouseX, p.lastMouseY
+	p.mu.RUnlock()
+	return p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type":       "mousePressed",
+		"x":          x,
+		"y":          y,
+		"button":     button,
+		"clickCount": 1,
+	}, nil)
+}
+
+// MouseUp releases a mouse button at the current pointer position. Empty button
+// defaults to "left".
+func (p *Page) MouseUp(ctx context.Context, button string) error {
+	if button == "" {
+		button = "left"
+	}
+	p.mu.RLock()
+	x, y := p.lastMouseX, p.lastMouseY
+	p.mu.RUnlock()
+	return p.mainSession.Send(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type":       "mouseReleased",
+		"x":          x,
+		"y":          y,
+		"button":     button,
+		"clickCount": 1,
+	}, nil)
 }
 
 func (p *Page) AddDialogListener(listener DialogListener) func() {
@@ -628,6 +833,10 @@ func (p *Page) installDialogHandler(session sessionLike) {
 			listeners = append(listeners, listener)
 		}
 		p.mu.RUnlock()
+		// Listeners may call dialog.Accept/Dismiss, which issue a synchronous
+		// CDP Send. That is safe here because cdp.Conn delivers events on a
+		// dedicated worker goroutine, not the read loop, so the Send's response
+		// can still be read while the listener is running.
 		for _, listener := range listeners {
 			listener(dialog)
 		}

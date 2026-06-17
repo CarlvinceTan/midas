@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><title>Delayed</title></head>
+<body>
+  <div id="root"></div>
+  <div id="result">waiting</div>
+  <script>
+    // A button appears 600ms after load; clicking it sets the result.
+    setTimeout(() => {
+      const b = document.createElement('button');
+      b.id = 'late';
+      b.textContent = 'Now here';
+      b.addEventListener('click', () => document.getElementById('result').textContent = 'late clicked');
+      document.getElementById('root').appendChild(b);
+    }, 600);
+  </script>
+</body>
+</html>

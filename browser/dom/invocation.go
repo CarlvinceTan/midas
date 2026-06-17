@@ -29,7 +29,9 @@ var helperSources = map[HelperName]string{
 	HelperFillElementValue: `(function(value) {
 	this.focus();
 	this.scrollIntoView({ block: "center", inline: "center" });
-	if ("value" in this) {
+	if (this.isContentEditable) {
+		this.textContent = value;
+	} else if ("value" in this) {
 		this.value = value;
 	}
 	this.dispatchEvent(new Event("input", { bubbles: true }));

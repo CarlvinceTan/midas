@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><title>Textarea test</title></head>
+<body>
+  <textarea></textarea>
+  <input id="input" value="">
+  <div id="editable" contenteditable="true" style="min-height: 1.5em; min-width: 100px; border: 1px solid #ccc;"></div>
+  <input id="readonly-input" readonly value="locked">
+  <input id="disabled-input" disabled>
+  <input id="number-input" type="number">
+  <script>
+    window.result = '';
+    const textarea = document.querySelector('textarea');
+    textarea.addEventListener('input', () => window.result = textarea.value);
+    window.events = [];
+    const input = document.getElementById('input');
+    input.addEventListener('input', () => window.events.push('input'));
+    input.addEventListener('change', () => window.events.push('change'));
+  </script>
+</body>
+</html>

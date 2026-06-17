@@ -17,7 +17,7 @@ type SessionRecord struct {
 	WSURL     string    `json:"ws_url"`
 	ChromePID int       `json:"chrome_pid"`
 	UserData  string    `json:"user_data_dir,omitempty"`
-	Humanize  string    `json:"humanize,omitempty"` // "", "off", "on", "default", "careful"
+	Humanize  string    `json:"humanize,omitempty"` // "", "off", "on"
 	CreatedAt time.Time `json:"created_at"`
 }
 

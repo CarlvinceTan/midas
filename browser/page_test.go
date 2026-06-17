@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PolymuxOrg/midas/cdp"
+	"github.com/PolymuxOrg/midas/internal/cdp"
 )
 
 func TestPageWaitForMainLoadStateFollowsCurrentMainFrame(t *testing.T) {

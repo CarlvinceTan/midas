@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Slider fixtures</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  section { margin-bottom: 28px; }
+  h2 { font-size: 14px; margin: 4px 0; color: #555; }
+  .rail {
+    position: relative; height: 16px; width: 600px;
+    background: #ddd; border-radius: 8px; cursor: pointer;
+    touch-action: none;            /* let pointer drags through */
+  }
+  .fill {
+    position: absolute; left: 0; top: 0; height: 100%;
+    background: #9cf; border-radius: 8px; pointer-events: none;
+  }
+  .thumb {
+    position: absolute; top: -4px; left: 0;
+    width: 24px; height: 24px; margin-left: -12px;
+    background: #c33; border-radius: 50%; pointer-events: none;
+  }
+  .rail:focus { outline: 2px solid #36c; outline-offset: 3px; }
+  output { font-variant-numeric: tabular-nums; color: #333; }
+</style>
+</head>
+<body>
+  <h1>Slider fixtures</h1>
+
+  <!-- 1. Native <input type=range> — the "value API" rung -->
+  <section>
+    <h2>native</h2>
+    <input id="native" type="range" min="0" max="100" step="1" value="0">
+    <output id="native-out">0</output>
+  </section>
+
+  <!-- 2. Static custom ARIA slider — rail click / drag / keyboard, no motion -->
+  <section>
+    <h2>aria-static</h2>
+    <div id="aria-rail" class="rail" role="slider" tabindex="0"
+         aria-label="static slider"
+         aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+         aria-orientation="horizontal">
+      <div class="fill" id="aria-fill"></div>
+      <div class="thumb" id="aria-thumb"></div>
+    </div>
+    <output id="aria-out">0</output>
+  </section>
+
+  <!-- 3. Moving "video timeline" — a playhead that auto-advances like a playing
+       video. The thumb is in continuous motion; the rail is stationary. -->
+  <section>
+    <h2>video-timeline</h2>
+    <div id="video-rail" class="rail" role="slider" tabindex="0"
+         aria-label="video timeline"
+         aria-valuemin="0" aria-valuemax="120" aria-valuenow="0"
+         aria-orientation="horizontal">
+      <div class="fill" id="video-fill"></div>
+      <div class="thumb" id="video-thumb"></div>
+    </div>
+    <output id="video-out">0.00 / 120</output>
+  </section>
+
+<script>
+  // Generic ARIA-slider wiring shared by the static and video sliders. Supports
+  // three input modalities, mirroring how real scrubbers (YouTube, media-chrome)
+  // behave:
+  //   - pointer: press anywhere on the rail begins a scrub, move tracks the
+  //     pointer, release commits. The thumb is never the hit target.
+  //   - keyboard: Arrow/Home/End/PageUp/PageDown step, and digit keys 0-9 jump
+  //     to 0%-90% (YouTube convention).
+  // The caller supplies value get/seek callbacks so each slider owns its state.
+  function wireSlider(rail, opts) {
+    var thumb = rail.querySelector('.thumb');
+    var fill = rail.querySelector('.fill');
+    var step = opts.step || 1;
+    var pageStep = opts.page || 0.1;
+
+    function render() {
+      var v = opts.getValue();
+      var max = opts.getMax();
+      var f = max > 0 ? v / max : 0;
+      rail.setAttribute('aria-valuenow', String(Math.round(v * 100) / 100));
+      if (thumb) thumb.style.left = (f * 100) + '%';
+      if (fill) fill.style.width = (f * 100) + '%';
+    }
+
+    function fractionFromClientX(clientX) {
+      var r = rail.getBoundingClientRect();
+      return Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    }
+
+    var scrubbing = false;
+    rail.addEventListener('pointerdown', function (e) {
+      scrubbing = true;
+      try { rail.setPointerCapture(e.pointerId); } catch (_) {}
+      opts.onSeek(fractionFromClientX(e.clientX) * opts.getMax(), { scrubStart: true });
+      render();
+    });
+    rail.addEventListener('pointermove', function (e) {
+      if (!scrubbing) return;
+      opts.onSeek(fractionFromClientX(e.clientX) * opts.getMax(), { scrubbing: true });
+      render();
+    });
+    window.addEventListener('pointerup', function (e) {
+      if (!scrubbing) return;
+      scrubbing = false;
+      opts.onSeek(fractionFromClientX(e.clientX) * opts.getMax(), { scrubEnd: true });
+      render();
+    });
+
+    rail.addEventListener('keydown', function (e) {
+      var max = opts.getMax();
+      var v = opts.getValue();
+      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') v += step;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') v -= step;
+      else if (e.key === 'PageUp') v += pageStep * max;
+      else if (e.key === 'PageDown') v -= pageStep * max;
+      else if (e.key === 'Home') v = 0;
+      else if (e.key === 'End') v = max;
+      else if (/^[0-9]$/.test(e.key)) v = (Number(e.key) / 10) * max;
+      else return;
+      e.preventDefault();
+      opts.onSeek(Math.min(max, Math.max(0, v)), { key: true });
+      render();
+    });
+
+    return { render: render };
+  }
+
+  // 1. native range: mirror its value into the <output>.
+  (function () {
+    var n = document.getElementById('native');
+    var out = document.getElementById('native-out');
+    function sync() { out.textContent = n.value; }
+    n.addEventListener('input', sync);
+    n.addEventListener('change', sync);
+  })();
+
+  // 2. static ARIA slider.
+  (function () {
+    var rail = document.getElementById('aria-rail');
+    var out = document.getElementById('aria-out');
+    var value = 0;
+    var max = 100;
+    var api = wireSlider(rail, {
+      getValue: function () { return value; },
+      getMax: function () { return max; },
+      step: 1, page: 0.1,
+      onSeek: function (v) { value = v; out.textContent = value.toFixed(0); },
+    });
+    api.render();
+    window.ariaSlider = { get value() { return value; } };
+  })();
+
+  // 3. moving video timeline. currentTime advances in real time (scaled by
+  // PLAYBACK_RATE) unless the user is actively scrubbing, exactly like a playing
+  // <video>. window.player exposes ground truth for the test, with the same
+  // shape as HTMLMediaElement (currentTime / duration / pause / play).
+  (function () {
+    var rail = document.getElementById('video-rail');
+    var out = document.getElementById('video-out');
+    var duration = 120;
+    var PLAYBACK_RATE = 6;     // 6x real time -> thumb clearly fails the
+                               // <1px/80ms actionability stability gate.
+    var currentTime = 0;
+    var playing = true;
+    var scrubbing = false;
+
+    function paint() { out.textContent = currentTime.toFixed(2) + ' / ' + duration; }
+
+    var api = wireSlider(rail, {
+      getValue: function () { return currentTime; },
+      getMax: function () { return duration; },
+      step: 5, page: 0.1,
+      onSeek: function (v, info) {
+        currentTime = v;
+        if (info && info.scrubStart) scrubbing = true;
+        if (info && info.scrubEnd) scrubbing = false;
+        paint();
+      },
+    });
+
+    var last = performance.now();
+    function tick(now) {
+      var dt = (now - last) / 1000;
+      last = now;
+      if (playing && !scrubbing) {
+        currentTime = Math.min(duration, currentTime + dt * PLAYBACK_RATE);
+        api.render();
+        paint();
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+
+    window.player = {
+      get currentTime() { return currentTime; },
+      get duration() { return duration; },
+      get playing() { return playing; },
+      pause: function () { playing = false; },
+      play: function () { playing = true; },
+    };
+  })();
+</script>
+</body>
+</html>

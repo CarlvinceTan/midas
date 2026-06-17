@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html>
+<head><title>Dialog test</title></head>
+<body>
+  <button id="alert" onclick="alert('alert message'); window.result = 'alert done'">Alert</button>
+  <button id="confirm" onclick="window.result = confirm('confirm message') ? 'accepted' : 'dismissed'">Confirm</button>
+  <button id="prompt" onclick="window.result = prompt('prompt message', 'default text')">Prompt</button>
+  <script>window.result = 'none';</script>
+</body>
+</html>

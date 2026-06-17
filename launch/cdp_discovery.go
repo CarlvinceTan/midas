@@ -11,7 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/PolymuxOrg/midas/debug"
+	"github.com/PolymuxOrg/midas/internal/debug"
 )
 
 type cdpEndpointOptions struct {

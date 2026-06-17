@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head><title>Keyboard test</title></head>
+<body>
+  <textarea autofocus></textarea>
+  <script>
+    window.log = [];
+    const textarea = document.querySelector('textarea');
+    textarea.focus();
+    for (const name of ['keydown', 'keypress', 'keyup', 'input']) {
+      textarea.addEventListener(name, event => {
+        if (name === 'input') {
+          window.log.push(`input: ${textarea.value}`);
+        } else {
+          window.log.push(`${name}: ${event.key} ${event.code}`);
+        }
+      });
+    }
+    window.getLog = () => window.log.join('\n');
+  </script>
+</body>
+</html>

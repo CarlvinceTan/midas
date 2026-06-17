@@ -65,6 +65,21 @@ func NewRegistry() Registry {
 		InputHint:   `{"selector":".results","percent":100} or {"delta_y":800}`,
 	}, scroll)
 	r.register(Spec{
+		Name:        "check",
+		Description: "Check a checkbox or radio button.",
+		InputHint:   `{"selector":"#agree"}`,
+	}, check)
+	r.register(Spec{
+		Name:        "uncheck",
+		Description: "Uncheck a checkbox.",
+		InputHint:   `{"selector":"#agree"}`,
+	}, uncheck)
+	r.register(Spec{
+		Name:        "select",
+		Description: "Select option(s) in a dropdown, matched by value or visible label.",
+		InputHint:   `{"selector":"#country","value":"au"} or {"selector":"#tags","values":["red","blue"]}`,
+	}, selectOption)
+	r.register(Spec{
 		Name:        "drag_and_drop",
 		Description: "Drag one element to another.",
 		InputHint:   `{"from_selector":"[data-id=source]","to_selector":"[data-id=target]","steps":8}`,
@@ -79,6 +94,16 @@ func NewRegistry() Registry {
 		Description: "Press a keyboard key or combination.",
 		InputHint:   `{"key":"Enter"}`,
 	}, keys)
+	r.register(Spec{
+		Name:        "key_down",
+		Description: "Press a key down without releasing it. Use for modifier keys (Shift, Control, Alt, Meta) before keys/click to form combos like Control+A; pair with key_up.",
+		InputHint:   `{"key":"Control"}`,
+	}, keyDown)
+	r.register(Spec{
+		Name:        "key_up",
+		Description: "Release a key previously pressed with key_down.",
+		InputHint:   `{"key":"Control"}`,
+	}, keyUp)
 	r.register(Spec{
 		Name:        "wait",
 		Description: "Wait for time to pass or for a selector to appear.",
