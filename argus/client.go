@@ -45,6 +45,13 @@ type NodeInput struct {
 	BBox       *BBox             `json:"bbox"`
 	XPath      string            `json:"xpath"`
 	InputValue string            `json:"input_value,omitempty"`
+	// Computed-style hints (prompt-only; the server ignores extras). cursor is
+	// near-ground-truth clickability; display/visibility let the renderer drop
+	// hidden overlays. Populated from DOMSnapshot's computedStyles.
+	Cursor     string `json:"cursor,omitempty"`
+	Display    string `json:"display,omitempty"`
+	Visibility string `json:"visibility,omitempty"`
+	Opacity    string `json:"opacity,omitempty"`
 }
 
 // ParseRequest is the POST /parse body (argus serve/server.py::ParseRequest).
@@ -68,6 +75,12 @@ type UINode struct {
 	Confidence  *float64 `json:"confidence"`
 	XPath       string   `json:"xpath"`
 	CSSSelector string   `json:"css_selector"`
+	// Interactability head (roi arch): predicted affordance the AX tree + type
+	// filter miss. Surfaced into the prompt so DOM-invisible clickables reach
+	// the agent. Defaults (unknown/false/0) for pernode/legacy checkpoints.
+	Interact      string  `json:"interact"`
+	Interactable  bool    `json:"interactable"`
+	InteractScore float64 `json:"interact_score"`
 }
 
 // UIEdge is one parent→children structural edge.

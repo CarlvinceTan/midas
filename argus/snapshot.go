@@ -5,11 +5,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/PolymuxOrg/midas/browser"
 )
+
+// computedStyleProps is the DOMSnapshot computedStyles request — the order is the
+// contract (layout.styles rows are string indices in this order). cursor is
+// near-ground-truth clickability; display/visibility let the renderer drop hidden
+// overlays. Mirrors serve/snapshot_core.py COMPUTED_STYLES.
+var computedStyleProps = []string{"cursor", "display", "visibility", "opacity"}
 
 // Snapshot captures the page, classifies it via the argus server, and returns a
 // *browser.SnapshotResult whose FormattedTree is the semantic graph rendering.
@@ -29,7 +36,11 @@ func Snapshot(ctx context.Context, page *browser.Page, c *Client) (*browser.Snap
 		return nil, err
 	}
 
-	shot, err := page.Screenshot(ctx, browser.ScreenshotOptions{Format: "png"})
+	// JPEG (not PNG): the argus server's resize_and_tile only uses PIL's
+	// decode-time draft downscale for JPEG inputs, so JPEG shrinks the wire
+	// payload AND activates the server's fast decode path. ViT-S tile-pooled
+	// features are insensitive to q85 artifacts.
+	shot, err := page.Screenshot(ctx, browser.ScreenshotOptions{Format: "jpeg", Quality: 85})
 	if err != nil {
 		return nil, fmt.Errorf("argus: screenshot: %w", err)
 	}
@@ -39,7 +50,7 @@ func Snapshot(ctx context.Context, page *browser.Page, c *Client) (*browser.Snap
 	if err != nil {
 		return nil, err
 	}
-	domInfo, err := captureDOMSnapshot(ctx, page)
+	domInfo, domSnap, err := captureDOMSnapshot(ctx, page)
 	if err != nil {
 		return nil, err
 	}
@@ -64,16 +75,33 @@ func Snapshot(ctx context.Context, page *browser.Page, c *Client) (*browser.Snap
 	}
 	tree := buildArgusText(graph, byID, viewW, viewH, scrollY, docHeight)
 
-	// Reuse the heuristic snapshot's XPathMap/URLMap (keyed "0-<backendNodeId>",
-	// which our rendered refs match) so click-by-ref + self-heal still resolve.
-	// v1 trade-off: this is a second capture on the argus-success path; acceptable
-	// while the feature is opt-in. On argus failure the caller does this once.
-	base, err := page.Snapshot(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("argus: base snapshot for xpath map: %w", err)
+	// Build the click-by-ref locator maps (XPathMap/URLMap, keyed
+	// "0-<backendNodeId>" to match our rendered refs) from the DOMSnapshot we
+	// ALREADY captured — no second full page.Snapshot(). The xpath synthesis is a
+	// verified byte-for-byte port of the heuristic's algorithm (locator_maps.go).
+	// If synthesis comes up empty (snapshot lacked parentIndex/nodeType), fall
+	// back to the heuristic snapshot so the maps are never silently lost.
+	xpathMap, urlMap := buildLocatorMaps(domSnap)
+	if len(xpathMap) == 0 {
+		base, ferr := page.Snapshot(ctx)
+		if ferr != nil {
+			return nil, fmt.Errorf("argus: base snapshot for xpath map: %w", ferr)
+		}
+		base.FormattedTree = tree
+		return base, nil
 	}
-	base.FormattedTree = tree
-	return base, nil
+	frameID := page.MainFrameID()
+	return &browser.SnapshotResult{
+		FormattedTree: tree,
+		XPathMap:      xpathMap,
+		URLMap:        urlMap,
+		PerFrame: []browser.PerFrameSnapshot{{
+			FrameID:       frameID,
+			FormattedTree: tree,
+			XPathMap:      xpathMap,
+			URLMap:        urlMap,
+		}},
+	}, nil
 }
 
 // --- CDP capture --------------------------------------------------------------
@@ -178,10 +206,14 @@ func getFullAXTree(ctx context.Context, page *browser.Page) ([]axNode, error) {
 }
 
 type domInfo struct {
-	Tag   string
-	Attrs map[string]string
-	BBox  *BBox
-	Value string
+	Tag        string
+	Attrs      map[string]string
+	BBox       *BBox
+	Value      string
+	Cursor     string
+	Display    string
+	Visibility string
+	Opacity    string
 }
 
 type domRareString struct {
@@ -191,6 +223,8 @@ type domRareString struct {
 
 type domNodesRaw struct {
 	BackendNodeID []int         `json:"backendNodeId"`
+	ParentIndex   []int         `json:"parentIndex"`
+	NodeType      []int         `json:"nodeType"`
 	NodeName      []int         `json:"nodeName"`
 	Attributes    [][]int       `json:"attributes"`
 	InputValue    domRareString `json:"inputValue"`
@@ -199,6 +233,7 @@ type domNodesRaw struct {
 type domLayoutRaw struct {
 	NodeIndex []int       `json:"nodeIndex"`
 	Bounds    [][]float64 `json:"bounds"`
+	Styles    [][]int     `json:"styles"`
 }
 
 type domDocRaw struct {
@@ -211,13 +246,15 @@ type domSnapshotResp struct {
 	Documents []domDocRaw `json:"documents"`
 }
 
-// captureDOMSnapshot runs DOMSnapshot.captureSnapshot and parses it.
-func captureDOMSnapshot(ctx context.Context, page *browser.Page) (map[int]*domInfo, error) {
+// captureDOMSnapshot runs DOMSnapshot.captureSnapshot and parses it, returning
+// both the per-node info map (for the prompt) and the raw response (so the
+// locator maps can be synthesised from it instead of a second page.Snapshot()).
+func captureDOMSnapshot(ctx context.Context, page *browser.Page) (map[int]*domInfo, domSnapshotResp, error) {
 	var snap domSnapshotResp
-	if err := page.SendCDP(ctx, "DOMSnapshot.captureSnapshot", map[string]any{"computedStyles": []string{}}, &snap); err != nil {
-		return nil, fmt.Errorf("argus: captureSnapshot: %w", err)
+	if err := page.SendCDP(ctx, "DOMSnapshot.captureSnapshot", map[string]any{"computedStyles": computedStyleProps}, &snap); err != nil {
+		return nil, domSnapshotResp{}, fmt.Errorf("argus: captureSnapshot: %w", err)
 	}
-	return parseDOMSnapshot(snap), nil
+	return parseDOMSnapshot(snap), snap, nil
 }
 
 // parseDOMSnapshot is the Go port of snapshot_core.parse_dom_snapshot:
@@ -255,13 +292,39 @@ func parseDOMSnapshot(snap domSnapshotResp) map[int]*domInfo {
 			}
 		}
 		for li, ni := range doc.Layout.NodeIndex {
-			if ni >= len(n.BackendNodeID) || li >= len(doc.Layout.Bounds) {
+			if ni >= len(n.BackendNodeID) {
 				continue
 			}
-			b := doc.Layout.Bounds[li]
-			if len(b) == 4 && b[2] > 0 && b[3] > 0 {
-				if di := index[n.BackendNodeID[ni]]; di != nil {
+			di := index[n.BackendNodeID[ni]]
+			if di == nil {
+				continue
+			}
+			if li < len(doc.Layout.Bounds) {
+				b := doc.Layout.Bounds[li]
+				if len(b) == 4 && b[2] > 0 && b[3] > 0 {
 					di.BBox = &BBox{X: b[0], Y: b[1], W: b[2], H: b[3]}
+				}
+			}
+			if li < len(doc.Layout.Styles) {
+				row := doc.Layout.Styles[li]
+				for k, name := range computedStyleProps {
+					if k >= len(row) {
+						break
+					}
+					v := s(row[k])
+					if v == "" {
+						continue
+					}
+					switch name {
+					case "cursor":
+						di.Cursor = v
+					case "display":
+						di.Display = v
+					case "visibility":
+						di.Visibility = v
+					case "opacity":
+						di.Opacity = v
+					}
 				}
 			}
 		}
@@ -288,13 +351,14 @@ func buildNodesPayload(axNodes []axNode, dom map[int]*domInfo, scrollX, scrollY 
 		var bbox *BBox
 		tag := "div"
 		attrs := map[string]string{}
-		value := ""
+		value, cursor, display, visibility, opacity := "", "", "", "", ""
 		if info != nil {
 			tag = info.Tag
 			if info.Attrs != nil {
 				attrs = info.Attrs
 			}
 			value = info.Value
+			cursor, display, visibility, opacity = info.Cursor, info.Display, info.Visibility, info.Opacity
 			if info.BBox != nil {
 				bbox = &BBox{
 					X: info.BBox.X - scrollX,
@@ -318,6 +382,10 @@ func buildNodesPayload(axNodes []axNode, dom map[int]*domInfo, scrollX, scrollY 
 			ChildIDs:   ax.ChildIDs,
 			BBox:       bbox,
 			InputValue: value,
+			Cursor:     cursor,
+			Display:    display,
+			Visibility: visibility,
+			Opacity:    opacity,
 		})
 	}
 	return out
@@ -351,6 +419,58 @@ func confOr(c *float64) float64 {
 // form ("0-<id>") so the rendered prompt's refs match midas's XPathMap keys and
 // click-by-ref resolution.
 func midasRef(id string) string { return "0-" + id }
+
+// --- affordance surfacing (port of serve/snapshot_core.py helpers) ------------
+//
+// Uses the model's OWN interact-head prediction only — deliberately NOT the CSS
+// cursor. cursor is the answer to the perception task the interact head exists to
+// solve; surfacing it would mask whether argus is actually good. cursor stays a
+// training signal, not a runtime crutch.
+
+func promptInteractThreshold() float64 {
+	if v := os.Getenv("ARGUS_PROMPT_INTERACT_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return 0.6
+}
+
+// affordanceKind = the model's predicted affordance above the prompt threshold.
+func affordanceKind(n UINode) string {
+	if (n.Interact == "clickable" || n.Interact == "draggable") && n.InteractScore >= promptInteractThreshold() {
+		return n.Interact
+	}
+	return ""
+}
+
+// interactableSurface admits an affordance the model's interact head predicts but
+// the type/role filter would drop. ARGUS_PROMPT_INTERACT=0 disables it.
+func interactableSurface(n UINode) bool {
+	if os.Getenv("ARGUS_PROMPT_INTERACT") == "0" {
+		return false
+	}
+	return affordanceKind(n) != ""
+}
+
+func interactSuffix(n UINode) string {
+	switch affordanceKind(n) {
+	case "draggable":
+		return " draggable"
+	case "clickable":
+		if !interactiveTypes[n.Type] {
+			return " clickable"
+		}
+	}
+	return ""
+}
+
+// isHidden drops visibility:hidden / display:none nodes (they keep a layout box):
+// a real STATE fact (not on screen), not a perception task. opacity:0 is excluded
+// (transparent-but-clickable overlays).
+func isHidden(visibility, display string) bool {
+	return visibility == "hidden" || display == "none"
+}
 
 func buildArgusText(graph *UIGraph, payloadByID map[string]*NodeInput, viewW, viewH, scrollY, docHeight float64) string {
 	childToParent := map[string]string{}
@@ -390,18 +510,25 @@ func buildArgusText(graph *UIGraph, payloadByID map[string]*NodeInput, viewW, vi
 		if conf < 0.5 && (n.Role == "structural" || n.Role == "decoration") {
 			continue
 		}
+		p := payloadByID[n.ID]
+		if p != nil && isHidden(p.Visibility, p.Display) {
+			continue
+		}
 		hasText := n.Label != "" && !tags[strings.ToLower(n.Label)]
 		switch {
 		case interactiveTypes[n.Type]:
 		case contextTypes[n.Type] && hasText:
 		case hasText && (n.Role == "content" || n.Role == "search" || n.Role == "navigation" ||
 			n.Role == "primary_action" || n.Role == "secondary_action"):
+		case interactableSurface(n):
+			// Affordance the model's interact head recovered but type/role didn't
+			// surface — DOM-invisible clickable/draggable nodes.
 		default:
 			continue
 		}
 
 		var bbox *BBox
-		if p := payloadByID[n.ID]; p != nil {
+		if p != nil {
 			bbox = p.BBox
 		}
 		if bbox == nil {
@@ -451,7 +578,7 @@ func buildArgusText(graph *UIGraph, payloadByID map[string]*NodeInput, viewW, vi
 			continue
 		}
 
-		line := fmt.Sprintf("%s[%s] type:%s role:%s", indent, midasRef(n.ID), n.Type, n.Role)
+		line := fmt.Sprintf("%s[%s] type:%s role:%s%s", indent, midasRef(n.ID), n.Type, n.Role, interactSuffix(n))
 		if n.Label != "" {
 			line += fmt.Sprintf(" %q", truncate(n.Label, 80))
 		}
