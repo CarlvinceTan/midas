@@ -126,7 +126,13 @@ function eventClient() {
   })();
   return {
     client: {
-      session: { get: async () => session("s1", "t"), messages: async () => [] },
+      session: {
+        get: async () => session("s1", "t"),
+        messages: async () => [],
+        promptAsync: async () => {},
+        command: async () => {},
+        abort: async () => {},
+      },
       event: { subscribe: async () => ({ stream }) },
     },
     send(event: unknown) {
@@ -328,4 +334,123 @@ test("a failed question reply or reject leaves the prompt pending", async () => 
     await assert.rejects(call, new RegExp(`${fail} route unavailable`));
     assert.equal(controller.transcript.questions.length, 1, `${fail}: prompt should stay pending`);
   }
+});
+
+// --- explicit-turn completion correlation ----------------------------------
+
+const userInfo = (id: string) => ({ id, sessionID: "s1", role: "user", agent: "main", time: { created: 0 } });
+
+const assistantInfo = (id: string, parentID: string, finish?: string, aborted = false) => ({
+  id,
+  sessionID: "s1",
+  role: "assistant",
+  parentID,
+  mode: "main",
+  providerID: "p",
+  modelID: "m",
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  time: { created: 0, completed: 0 },
+  ...(finish ? { finish } : {}),
+  ...(aborted ? { error: { name: "MessageAbortedError", data: { message: "aborted" } } } : {}),
+});
+
+const messageEvent = (info: unknown) => ({ type: "message.updated", properties: { info } });
+const idleEvent = () => ({ type: "session.idle", properties: { sessionID: "s1" } });
+
+test("consumeQueueCompletion proves only a terminal message for the explicit turn's own parent", async () => {
+  const { client, send } = eventClient();
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  await controller.prompt("go");
+  assert.equal(controller.transcript.phase, "busy");
+
+  // A terminal for another parent (and a bare idle) proves nothing.
+  send(messageEvent(assistantInfo("a-other", "u-other", "stop")));
+  await settle();
+  send(idleEvent());
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), false);
+
+  // Bind the explicit turn's own user message; a tool step is not terminal.
+  send(messageEvent(userInfo("u1")));
+  send(messageEvent(assistantInfo("a-step", "u1", "tool-calls")));
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), false);
+
+  // The matching terminal step completes, and is consumed exactly once.
+  send(messageEvent(assistantInfo("a-final", "u1", "stop")));
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), true);
+  assert.equal(controller.consumeQueueCompletion(), false, "a completion is consumed once");
+});
+
+test("consumeQueueCompletion requires the session to be idle", async () => {
+  const { client, send } = eventClient();
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  await controller.prompt("go");
+  send(messageEvent(userInfo("u1")));
+  send(messageEvent(assistantInfo("a-final", "u1", "stop")));
+  await settle();
+  assert.equal(controller.transcript.phase, "busy");
+  assert.equal(controller.consumeQueueCompletion(), false, "a terminal while busy is not a completion yet");
+
+  send(idleEvent());
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), true, "the paired idle releases it");
+});
+
+test("an aborted assistant message fails the explicit turn closed", async () => {
+  const { client, send } = eventClient();
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  await controller.prompt("go");
+  send(messageEvent(userInfo("u1")));
+  send(messageEvent(assistantInfo("a-abort", "u1", undefined, true)));
+  send(messageEvent(assistantInfo("a-final", "u1", "stop")));
+  send(idleEvent());
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), false, "an aborted turn can never prove completion");
+});
+
+test("a late abort acknowledgement does not reset a newer prompt to idle", async () => {
+  let releaseAbort!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseAbort = resolve;
+  });
+  const client = {
+    session: {
+      get: async () => session("s1", "t"),
+      messages: async () => [],
+      promptAsync: async () => {},
+      abort: () => gate,
+    },
+    event: { subscribe: async () => ({ stream: (async function* () {})() }) },
+  };
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  controller.transcript.setPhase("busy");
+  const aborting = controller.abort();
+  await controller.prompt("fresh");
+  assert.equal(controller.transcript.phase, "busy");
+  releaseAbort();
+  await aborting;
+  assert.equal(controller.transcript.phase, "busy", "the late acknowledgement did not reset the newer turn");
+});
+
+test("a resumed session's completed history never proves the explicit turn", async () => {
+  const client = {
+    session: {
+      get: async () => session("s1", "t"),
+      messages: async () => [
+        { info: userInfo("u1"), parts: [] },
+        { info: assistantInfo("a-final", "u1", "stop"), parts: [] },
+      ],
+    },
+    event: { subscribe: async () => ({ stream: (async function* () {})() }) },
+  };
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  assert.equal(controller.consumeQueueCompletion(), false, "unknown ownership fails closed");
 });
