@@ -99,6 +99,15 @@ export declare class Editor implements Component, Focusable {
     render(width: number): string[];
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
     handleInput(data: string): void;
+    /**
+     * Hanging indent (columns) for shell-mode continuation lines (`! `/`!! `).
+     */
+    private hangingIndent;
+    /**
+     * Split one logical line into visual chunks, flagging shell-mode
+     * continuation chunks with the hanging indent.
+     */
+    private visualChunks;
     private layoutText;
     getText(): string;
     private expandPasteMarkers;

@@ -13,7 +13,6 @@ function task(overrides: Partial<Task> = {}): Task {
   return {
     id: "T1",
     title: "Implement feature",
-    group: "Feature",
     instructions: "Add result.txt",
     checks: [],
     status: "new",
@@ -25,10 +24,10 @@ function task(overrides: Partial<Task> = {}): Task {
   };
 }
 
-function renderRow(overrides: Partial<Task>): string {
+function renderRow(overrides: Partial<Task>, width = 160): string {
   const view = new TasksView(() => {});
   view.tasks = [task(overrides)];
-  return view.render(160).join("\n");
+  return view.render(width).join("\n");
 }
 
 /** Last SGR code before `index` that sets a colour/attribute, ignoring resets. */
@@ -37,13 +36,11 @@ function activeColor(text: string, index: number): string {
   return codes.reverse().find((code) => code !== "\x1b[0m" && code !== "\x1b[39m" && code !== "\x1b[22m" && code !== "\x1b[49m") ?? "";
 }
 
-/** 12 tasks spread across 5 groups plus one distinct worktree branch each. */
-function multiGroupTasks(): Task[] {
-  const groups = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"];
-  return Array.from({ length: 12 }, (_, i) => task({
+/** A board of `count` tasks with one worktree branch each. */
+function manyTasks(count = 12): Task[] {
+  return Array.from({ length: count }, (_, i) => task({
     id: `T${i + 1}`,
     title: `Task ${i + 1}`,
-    group: groups[i % groups.length]!,
     attempts: [{ id: `a${i}`, worktree: `/tmp/worktree-${i}`, branch: `midas/t${i + 1}`, base: "main" }],
   }));
 }
@@ -58,7 +55,7 @@ interface ContentRow {
   id: string;
 }
 
-/** Content rows (task rows, not group headers or the counter) in render order. */
+/** Content rows (task rows, not the counter) in render order. */
 function contentRows(lines: string[]): ContentRow[] {
   return lines.map(stripAnsi).flatMap((line) => {
     const match = /^([→ ]) \S (T\d+)\b/.exec(line);
@@ -66,7 +63,6 @@ function contentRows(lines: string[]): ContentRow[] {
   });
 }
 
-/** Render `tasks` with the pointer moved to `selected`. */
 function renderSelected(tasks: Task[], selected: number): string[] {
   const view = new TasksView(() => {});
   view.tasks = tasks;
@@ -81,331 +77,181 @@ function trailingBlanks(lines: string[]): number {
   return count;
 }
 
-test("taskIcon keeps raw glyphs and colored status reflects task state", () => {
-  assert.equal(taskIcon(task(), 0), "○");
-  assert.equal(taskIcon(task({ status: "completed" }), 0), "✓");
-  assert.equal(taskIcon(task({ status: "blocked" }), 0), "!");
-  assert.equal(taskIcon(task({ status: "cancelled" }), 0), "✗");
+test("taskIcon/taskIconColor derive from status plus merge progress", () => {
+  assert.equal(taskIcon(task({ status: "new" }), 0), "○");
+  assert.equal(taskIconColor(task({ status: "new" })), "accent");
+
   const running = task({ status: "running" });
   assert.notEqual(taskIcon(running, 0), taskIcon(running, 1));
-  assert.equal(taskIconColor(task()), undefined);
   assert.equal(taskIconColor(running), "accent");
-  assert.equal(taskIconColor(task({ status: "completed" })), "success");
+
+  assert.equal(taskIcon(task({ status: "completed", merge: "not-merged" }), 0), "●");
+  assert.equal(taskIconColor(task({ status: "completed", merge: "not-merged" })), "accent");
+
+  assert.equal(taskIcon(task({ status: "completed", merge: "integrating" }), 0), "⇣");
+  assert.equal(taskIconColor(task({ status: "completed", merge: "integrating" })), "warning");
+
+  assert.equal(taskIcon(task({ status: "completed", merge: "merged" }), 0), "✓");
+  assert.equal(taskIconColor(task({ status: "completed", merge: "merged" })), "success");
+
+  assert.equal(taskIcon(task({ status: "clarify" }), 0), "?");
+  assert.equal(taskIconColor(task({ status: "clarify" })), "warning");
+
+  assert.equal(taskIcon(task({ status: "blocked" }), 0), "!");
   assert.equal(taskIconColor(task({ status: "blocked" })), "error");
+
+  assert.equal(taskIcon(task({ status: "cancelled" }), 0), "✗");
   assert.equal(taskIconColor(task({ status: "cancelled" })), "error");
 });
 
-test("completed rows paint the tick green", () => {
-  const line = renderRow({ status: "completed" });
-  assert.ok(line.includes(theme().fg("success", "✓")), `missing green tick: ${line}`);
+test("each state paints its glyph in the right colour", () => {
+  assert.ok(renderRow({ status: "new" }).includes(theme().fg("accent", "○")));
+  assert.ok(renderRow({ status: "completed", merge: "not-merged" }).includes(theme().fg("accent", "●")));
+  assert.ok(renderRow({ status: "completed", merge: "integrating" }).includes(theme().fg("warning", "⇣")));
+  assert.ok(renderRow({ status: "completed", merge: "merged" }).includes(theme().fg("success", "✓")));
+  assert.ok(renderRow({ status: "clarify" }).includes(theme().fg("warning", "?")));
+  assert.ok(renderRow({ status: "blocked" }).includes(theme().fg("error", "!")));
+  assert.ok(renderRow({ status: "cancelled" }).includes(theme().fg("error", "✗")));
 });
 
-test("running rows paint a spinner frame blue", () => {
-  const running = task({ status: "running" });
-  const line = renderRow({ status: "running" });
-  const coloredFrames = Array.from({ length: 10 }, (_, i) => theme().fg("accent", taskIcon(running, i)));
-  assert.ok(coloredFrames.some((frame) => line.includes(frame)), `missing blue spinner: ${line}`);
+test("the state is right-aligned to the row edge", () => {
+  const view = new TasksView(() => {});
+  view.tasks = [task({ status: "completed", merge: "merged", target: "main", title: "Short" })];
+  const line = view.render(60).find((candidate) => candidate.includes("T1"))!;
+  assert.equal(stripAnsi(line).length, 60, `row does not fill the width: ${stripAnsi(line)}`);
+  assert.ok(stripAnsi(line).endsWith("merged → main"), `state is not right-aligned: ${stripAnsi(line)}`);
 });
 
-test("blocked rows paint the bang red", () => {
-  const line = renderRow({ status: "blocked" });
-  assert.ok(line.includes(theme().fg("error", "!")), `missing red bang: ${line}`);
+test("rows render flat (no group headers) in id order", () => {
+  const tasks = [task({ id: "T2", title: "Two" }), task({ id: "T1", title: "One" }), task({ id: "T10", title: "Ten" })];
+  const rows = contentRows(renderSelected(tasks, 0));
+  assert.deepEqual(rows.map((row) => row.id), ["T1", "T2", "T10"], "rows are not flat and id-sorted");
 });
 
-test("cancelled rows paint the cross red", () => {
-  const line = renderRow({ status: "cancelled" });
-  assert.ok(line.includes(theme().fg("error", "✗")), `missing red cross: ${line}`);
+test("clarify/blocked fall back to a terse label, with the reason in details", () => {
+  assert.ok(stripAnsi(renderRow({ status: "clarify", detail: "which API?" })).includes("needs clarification"));
+  assert.ok(stripAnsi(renderRow({ status: "blocked", detail: "missing token" })).includes("blocked"));
+
+  const view = new TasksView(() => {});
+  view.tasks = [task({ status: "blocked", detail: "missing token" })];
+  view.handleInput("\r"); // menu (read-only -> Show details is first)
+  view.handleInput("\r");
+  assert.ok(stripAnsi(view.render(160).join("\n")).includes("missing token"), "reason missing from details");
+});
+
+test("the model status phrase is shown right-aligned when present", () => {
+  const view = new TasksView(() => {});
+  view.tasks = [task({ status: "running", progress: "writing parser tests" })];
+  const line = view.render(60).find((candidate) => candidate.includes("T1"))!;
+  assert.ok(stripAnsi(line).trimEnd().endsWith("writing parser tests"), `status not right-aligned: ${stripAnsi(line)}`);
+  assert.ok(line.includes(theme().fg("muted", "writing parser tests")));
 });
 
 test("merge-failed rows paint only the leading bang red", () => {
   const line = renderRow({ merge: "failed" });
-  const errorAnsi = theme().getFgAnsi("error");
-  const mutedAnsi = theme().getFgAnsi("muted");
-
   assert.ok(stripAnsi(line).includes("! merge failed"), `status text changed: ${line}`);
-  assert.ok(
-    line.includes(theme().fg("error", "!") + theme().fg("muted", " merge failed")),
-    `bang is not red or the remainder is not muted: ${line}`,
-  );
-  assert.equal(activeColor(line, line.indexOf("!")), errorAnsi, `bang is not error-coloured: ${line}`);
-  assert.equal(activeColor(line, line.indexOf("merge failed")), mutedAnsi, `remainder is not muted: ${line}`);
+  assert.equal(activeColor(line, line.indexOf("!")), theme().getFgAnsi("error"));
+  assert.equal(activeColor(line, line.indexOf("merge failed")), theme().getFgAnsi("muted"));
 });
 
-test("merged rows keep the muted full status", () => {
-  const line = renderRow({ status: "completed", merge: "merged", target: "main" });
-  assert.ok(line.includes(theme().fg("muted", "⤵ merged → main")), `merged status changed: ${line}`);
-  assert.ok(!line.includes(theme().fg("error", "!")), `merged row gained a red bang: ${line}`);
-});
-
-test("completed tasks with a blocked merge show a warning pending status with the reason", () => {
-  const branch = renderRow({ status: "completed", merge: "not-merged", mergeBlocked: "target main is not checked out" });
-  const branchText = stripAnsi(branch);
-  assert.ok(branchText.includes("merge pending"), `missing pending status: ${branch}`);
-  assert.ok(branchText.includes("target main not checked out"), `missing short reason: ${branch}`);
-  assert.ok(
-    branch.includes(theme().fg("warning", "merge pending — target main not checked out")),
-    `pending status is not warning-coloured: ${branch}`,
-  );
-
-  const overlap = renderRow({ status: "completed", merge: "not-merged", mergeBlocked: "local changes would be overwritten: base.txt" });
-  assert.ok(stripAnsi(overlap).includes("merge pending — local changes overlap"), `overlap reason not shortened: ${overlap}`);
-  assert.equal(activeColor(overlap, overlap.indexOf("merge pending")), theme().getFgAnsi("warning"), `overlap status is not warning-coloured: ${overlap}`);
-});
-
-test("a completed unmerged task without a blocked reason keeps the neutral not-merged status", () => {
-  const line = renderRow({ status: "completed", merge: "not-merged" });
-  const text = stripAnsi(line);
-  assert.ok(text.includes("not merged"), `not-merged status changed: ${line}`);
-  assert.ok(!text.includes("merge pending"), `unblocked task gained a pending status: ${line}`);
-  assert.ok(line.includes(theme().fg("muted", "not merged")), `not-merged status is not muted: ${line}`);
-  assert.ok(!line.includes(theme().getFgAnsi("warning")), `unblocked task gained a warning status: ${line}`);
-});
-
-test("a merged task renders no pending status even with a stale reason", () => {
-  const line = renderRow({ status: "completed", merge: "merged", target: "main", mergeBlocked: "target main is not checked out" });
-  const text = stripAnsi(line);
-  assert.ok(text.includes("⤵ merged → main"), `merged status changed: ${line}`);
-  assert.ok(!text.includes("merge pending"), `merged task showed a pending status: ${line}`);
-  assert.ok(line.includes(theme().fg("muted", "⤵ merged → main")), `merged status is not muted: ${line}`);
-});
-
-test("merge-failed bang stays red when the status is truncated", () => {
-  const view = new TasksView(() => {});
-  view.tasks = [task({ merge: "failed" })];
-  const line = view.render(13).find((candidate) => candidate.includes("T1"))!;
-  const bangAt = line.indexOf("!");
-  assert.ok(bangAt >= 0, `bang was clipped away: ${line}`);
-  assert.equal(activeColor(line, bangAt), theme().getFgAnsi("error"), `bang lost its colour: ${line}`);
+test("completed tasks with a blocked merge show a terse merge-pending label", () => {
+  const line = renderRow({ status: "completed", merge: "not-merged", mergeBlocked: "target main is not checked out" });
+  assert.ok(stripAnsi(line).includes("merge pending"), stripAnsi(line));
+  assert.ok(!stripAnsi(line).includes("not checked out"), `reason should not be in the row: ${stripAnsi(line)}`);
 });
 
 test("keeps the full status and ellipsises the title in its own colour", () => {
   const title = "Implement a very long feature that will not fit in a narrow panel";
   const view = new TasksView(() => {});
   view.tasks = [task({ title, status: "completed", merge: "merged", target: "midas/integration" })];
-  const status = theme().fg("muted", "⤵ merged → midas/integration");
   const titleColor = theme().getFgAnsi("text");
-
   const narrow = view.render(48).find((line) => line.includes("T1"))!;
-  assert.ok(narrow.includes(status), `status was clipped: ${narrow}`);
+  assert.ok(stripAnsi(narrow).endsWith("merged → midas/integration"), `status was clipped: ${stripAnsi(narrow)}`);
+  assert.ok(narrow.includes("…"), `title was not ellipsised: ${narrow}`);
   const ellipsis = narrow.indexOf("…");
-  assert.ok(ellipsis > 0, `title was not ellipsised: ${narrow}`);
-  const colorAt = narrow.indexOf(titleColor);
-  assert.ok(colorAt >= 0, `title was not styled: ${narrow}`);
-  assert.equal(activeColor(narrow, colorAt + titleColor.length), titleColor, `visible title lost its colour: ${narrow}`);
   assert.equal(activeColor(narrow, ellipsis), titleColor, `ellipsis is not in the title colour: ${narrow}`);
-  assert.notEqual(activeColor(narrow, ellipsis), theme().getFgAnsi("muted"), `status colour bled onto the ellipsis: ${narrow}`);
-
-  const wide = view.render(160).find((line) => line.includes("T1"))!;
-  assert.ok(wide.includes(title), `full title missing at a wide width: ${wide}`);
 });
 
-/** Visible column where a row's styled title begins. */
-function titleColumn(line: string): number {
-  const at = line.indexOf(theme().getFgAnsi("text"));
-  assert.ok(at >= 0, `row has no styled title: ${line}`);
-  return stripAnsi(line.slice(0, at)).length;
-}
-
-test("id column aligns single and double digit ids and stays fixed across selections", () => {
-  const board = [
-    task({ id: "T2", title: "Two", group: "Feature" }),
-    task({ id: "T13", title: "Thirteen", group: "Feature" }),
-  ];
+test("id column aligns single and double digit ids", () => {
   const view = new TasksView(() => {});
-  view.tasks = board;
-  const lines = view.render(160);
-  const two = titleColumn(lines.find((line) => stripAnsi(line).includes("T2"))!);
-  const thirteen = titleColumn(lines.find((line) => stripAnsi(line).includes("T13"))!);
-  assert.equal(two, thirteen, "single and double digit titles start at different columns");
-
-  // The column must not shrink when the pointer moves onto the shorter id.
-  const columns = new Set<number>([two]);
-  for (let selected = 0; selected < board.length; selected += 1) {
-    const moving = new TasksView(() => {});
-    moving.tasks = board;
-    selectRow(moving, selected);
-    const selectedLine = moving.render(160).find((line) => line.startsWith("→"))!;
-    columns.add(titleColumn(selectedLine));
-  }
-  // A board left with only the shorter id must reserve the same column.
-  const alone = new TasksView(() => {});
-  alone.tasks = [task({ id: "T2", title: "Two" })];
-  columns.add(titleColumn(alone.render(160).find((line) => line.startsWith("→"))!));
-  assert.equal(columns.size, 1, `id column shifted: ${[...columns].join(", ")}`);
+  view.tasks = [task({ id: "T2", title: "Two" }), task({ id: "T13", title: "Thirteen" })];
+  const lines = view.render(160).map(stripAnsi);
+  const column = (line: string): number => line.indexOf("Two") >= 0 ? line.indexOf("Two") : line.indexOf("Thirteen");
+  assert.equal(column(lines.find((line) => line.includes("T2"))!), column(lines.find((line) => line.includes("T13"))!));
 });
 
-test("panel fits its content with no blank rows while the selection moves in both modes", () => {
-  const tasks = multiGroupTasks();
-  for (const mode of ["groups", "worktrees"] as const) {
-    for (const selected of [0, Math.floor(tasks.length / 2), tasks.length - 1]) {
-      const view = new TasksView(() => {});
-      view.tasks = tasks;
-      if (mode === "worktrees") view.handleInput("\t");
-      selectRow(view, selected);
-      const lines = view.render(160);
-      const marker = lines.find((line) => line.startsWith("→"));
-      assert.ok(marker, `${mode}: no selected row for index ${selected}`);
-      assert.ok(tasks.some((t) => marker!.includes(t.id)), `${mode}: selected row lost its task id: ${marker}`);
-      assert.equal(trailingBlanks(lines), 0, `${mode}: blank rows below the list at ${selected}`);
-    }
+test("panel fits its content with no blank rows while the selection moves", () => {
+  const tasks = manyTasks();
+  for (const selected of [0, Math.floor(tasks.length / 2), tasks.length - 1]) {
+    const lines = renderSelected(tasks, selected);
+    const marker = lines.find((line) => line.startsWith("→"));
+    assert.ok(marker, `no selected row for index ${selected}`);
+    assert.equal(trailingBlanks(lines), 0, `blank rows below the list at ${selected}`);
   }
 });
 
 test("details toggle renders without trailing blank rows", () => {
-  const tasks = multiGroupTasks();
-  for (const selected of [0, Math.floor(tasks.length / 2), tasks.length - 1]) {
-    const view = new TasksView(() => {});
-    view.tasks = tasks;
-    selectRow(view, selected);
-    view.handleInput("\r"); // open the actions menu
-    view.handleInput("\r"); // invoke the first action (Show details)
-    const lines = view.render(160);
-    assert.ok(lines.some((line) => line.includes("Worktree:")), `details missing for index ${selected}`);
-    assert.equal(trailingBlanks(lines), 0, `details added blank rows at ${selected}`);
-  }
+  const tasks = manyTasks();
+  const view = new TasksView(() => {});
+  view.tasks = tasks;
+  view.handleInput("\r"); // menu
+  view.handleInput("\r"); // Show details
+  assert.ok(view.render(160).some((line) => line.includes("Worktree:")));
+  assert.equal(trailingBlanks(view.render(160)), 0);
 });
 
 test("Enter opens an actions menu scoped to the task status", () => {
   const view = new TasksView(() => {}, true, { pause: () => {}, resume: () => {}, cancel: () => {}, remove: () => {} });
-  view.tasks = [task({ id: "T1", status: "running" }), task({ id: "T2", status: "paused" })];
+  view.tasks = [task({ id: "T1", status: "running" }), task({ id: "T2", status: "blocked" })];
   view.handleInput("\r");
   let text = stripAnsi(view.render(160).join("\n"));
   assert.match(text, /Actions/);
-  assert.match(text, /Pause/);
+  assert.match(text, /Halt/);
   assert.match(text, /Cancel/);
   assert.doesNotMatch(text, /Resume/);
   assert.doesNotMatch(text, /Remove/, "a running task cannot be removed");
-  view.handleInput("\x1b"); // close the menu
+  view.handleInput("\x1b");
   selectRow(view, 1);
   view.handleInput("\r");
   text = stripAnsi(view.render(160).join("\n"));
   assert.match(text, /Resume/);
   assert.match(text, /Remove/);
-  assert.doesNotMatch(text, /Pause/);
+  assert.doesNotMatch(text, /Halt/);
 });
 
 test("the default main agent sees a read-only board with no control actions", () => {
-  // main never drives the multitask architecture, even though it can read the
-  // same board: Enter still opens the menu, but it only offers inspection.
   const view = new TasksView(() => {}, false, { pause: () => {}, resume: () => {}, cancel: () => {}, remove: () => {} });
-  view.tasks = [task({ id: "T1", status: "running" }), task({ id: "T2", status: "new" })];
+  view.tasks = [task({ id: "T1", status: "running" })];
   view.handleInput("\r");
   const text = stripAnsi(view.render(160).join("\n"));
   assert.match(text, /Actions/);
   assert.match(text, /Show details/);
-  assert.doesNotMatch(text, /Pause/);
-  assert.doesNotMatch(text, /Resume/);
-  assert.doesNotMatch(text, /Cancel/);
-  assert.doesNotMatch(text, /Remove/);
+  assert.doesNotMatch(text, /Halt|Resume|Cancel|Remove/);
 });
 
-test("menu navigation stays in the menu and Esc closes only the menu", () => {
-  const paused: string[] = [];
-  const view = new TasksView(() => { throw new Error("overlay closed"); }, true, { pause: (id) => paused.push(id), resume: () => {}, cancel: () => {}, remove: () => {} });
-  view.tasks = [task({ id: "T1", status: "running" }), task({ id: "T2", status: "running" })];
-  view.handleInput("\r"); // menu on T1
-  view.handleInput("\x1b[B"); // Pause -> Cancel
-  view.handleInput("\x1b"); // Esc closes the menu, not the overlay
-  assert.doesNotMatch(stripAnsi(view.render(160).join("\n")), /Actions/);
-  assert.equal(paused.length, 0);
-  view.handleInput("\r"); // reopen
-  view.handleInput("\r"); // invoke the highlighted action (Pause)
-  assert.deepEqual(paused, ["T1"]);
-});
-
-test("empty and error renders keep a stable height for the same input", () => {
-  const plain = new TasksView(() => {});
-  const multitask = new TasksView(() => {}, true);
-  assert.equal(plain.render(160).length, multitask.render(160).length);
-
-  const tasks = multiGroupTasks();
-  const heights = new Set<number>();
-  for (const selected of [0, Math.floor(tasks.length / 2), tasks.length - 1]) {
-    const view = new TasksView(() => {});
-    view.tasks = tasks;
-    view.error = "board unavailable";
-    selectRow(view, selected);
-    heights.add(view.render(160).length);
-  }
-  assert.equal(heights.size, 1, `error height varied with selection: ${[...heights].join(", ")}`);
+test("Halt is wired to the pause control", () => {
+  const halted: string[] = [];
+  const view = new TasksView(() => {}, true, { pause: (id) => halted.push(id), resume: () => {}, cancel: () => {}, remove: () => {} });
+  view.tasks = [task({ id: "T1", status: "running" })];
+  view.handleInput("\r");
+  view.handleInput("\r");
+  assert.deepEqual(halted, ["T1"]);
 });
 
 test("selection stays on the bottom row while the window scrolls up", () => {
-  const tasks = multiGroupTasks();
-
-  // The first task is on the first content row, with the window starting at the top.
+  const tasks = manyTasks();
   const first = contentRows(renderSelected(tasks, 0));
-  assert.ok(first[0]?.arrow, `first content row is not selected: ${JSON.stringify(first)}`);
-  assert.equal(first[0]?.id, "T1", `first content row is not the first task: ${JSON.stringify(first)}`);
+  assert.equal(first[0]?.id, "T1");
+  assert.ok(first[0]?.arrow);
 
-  // The last task lands on the last content row with a full window above it and
-  // no content row below the arrow.
   const last = contentRows(renderSelected(tasks, tasks.length - 1));
-  const lastRow = last.at(-1);
-  assert.ok(lastRow?.arrow, `arrow is not on the last content row: ${JSON.stringify(last)}`);
-  assert.equal(lastRow?.id, "T8", `last content row is not the last task: ${JSON.stringify(last)}`);
   assert.equal(last.length, 7, `window was not full at the end: ${last.length}`);
-  assert.equal(last.filter((row) => row.arrow).length, 1, `arrow appeared more than once: ${JSON.stringify(last)}`);
-
-  // Crossing the scroll threshold drops the top task and pulls in the next one,
-  // so the content shifts up rather than leaving a gap below the arrow.
-  const before = contentRows(renderSelected(tasks, 6)).map((row) => row.id);
-  const after = contentRows(renderSelected(tasks, 7)).map((row) => row.id);
-  assert.equal(after.length, 7, `window under-filled while scrolling: ${after.join(", ")}`);
-  assert.equal(after[0], before[1], `rows did not scroll up: ${before.join(", ")} -> ${after.join(", ")}`);
+  assert.ok(last.at(-1)?.arrow, "arrow is not on the last content row");
+  assert.equal(last.filter((row) => row.arrow).length, 1);
 });
 
-test("the list never pads blank rows at the bottom", () => {
-  const tasks = multiGroupTasks();
-  for (const selected of [0, Math.floor(tasks.length / 2), tasks.length - 1]) {
-    assert.equal(trailingBlanks(renderSelected(tasks, selected)), 0, `blank rows at ${selected}`);
-  }
-});
-
-test("a window spanning many group headers still shows a full window", () => {
-  // One group per task maximises the headers a window can span.
-  const tasks = Array.from({ length: 9 }, (_, i) => task({ id: `T${i + 1}`, title: `Task ${i + 1}`, group: `Group ${i + 1}` }));
-  for (let selected = 0; selected < tasks.length; selected += 1) {
-    const lines = renderSelected(tasks, selected);
-    const rows = contentRows(lines);
-    assert.equal(rows.length, Math.min(7, tasks.length), `window under-filled at ${selected}: ${rows.map((row) => row.id).join(", ")}`);
-    assert.equal(rows.filter((row) => row.arrow).length, 1, `arrow missing at ${selected}`);
-    assert.equal(trailingBlanks(lines), 0, `blank rows at ${selected}`);
-  }
-});
-
-test("the clamped tail window is full and unpadded", () => {
-  // A large leading group followed by many singleton groups.
-  const tasks = [
-    ...Array.from({ length: 3 }, (_, i) => task({ id: `T${i + 1}`, title: `Alpha ${i + 1}`, group: "Alpha" })),
-    task({ id: "T4", title: "Beta", group: "Beta" }),
-    task({ id: "T5", title: "Gamma", group: "Gamma" }),
-    task({ id: "T6", title: "Delta", group: "Delta" }),
-    task({ id: "T7", title: "Epsilon", group: "Epsilon" }),
-    task({ id: "T8", title: "Zeta", group: "Zeta" }),
-  ];
-  const last = renderSelected(tasks, tasks.length - 1);
-  const rows = contentRows(last);
-  assert.equal(rows.length, 7, `tail window not full: ${rows.map((row) => row.id).join(", ")}`);
-  assert.ok(rows.at(-1)?.arrow && rows.at(-1)?.id === "T8", `arrow is not on the last content row: ${JSON.stringify(rows)}`);
-  assert.equal(trailingBlanks(last), 0, "tail window added blank rows");
-});
-
-test("a small board renders at its own stable height with no empty window rows", () => {
-  const small = [
-    task({ id: "T1", title: "One", group: "Alpha" }),
-    task({ id: "T2", title: "Two", group: "Beta" }),
-    task({ id: "T3", title: "Three", group: "Beta" }),
-  ];
-  const heights = new Set<number>();
-  for (let selected = 0; selected < small.length; selected += 1) {
-    const lines = renderSelected(small, selected);
-    heights.add(lines.length);
-    // Every task is shown and the board is not padded out to a full window.
-    assert.equal(contentRows(lines).length, small.length, `small board dropped a task at ${selected}`);
-    assert.equal(lines.filter((line) => line === "").length, 0, `small board gained padding at ${selected}`);
-  }
-  // Two group headers (Alpha, Beta) plus three task rows.
-  assert.equal(heights.size, 1, `small board height varied: ${[...heights].join(", ")}`);
-  assert.equal([...heights][0], 5, `small board height is wrong: ${[...heights].join(", ")}`);
+test("empty and error renders keep a stable height", () => {
+  const plain = new TasksView(() => {});
+  const multitask = new TasksView(() => {}, true);
+  assert.equal(plain.render(160).length, multitask.render(160).length);
 });

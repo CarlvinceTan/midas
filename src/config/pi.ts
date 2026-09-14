@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { midasAgents } from "../agents/definitions.ts";
 
 /** Global pi config directory (respects PI_CONFIG_DIR like pi does). */
 export function piConfigDir(): string {
@@ -35,6 +36,8 @@ export function agentsProjectDir(cwd: string): string {
  *
  * Sources are scoped to midas's own directories so skills, MCP servers and
  * context come only from `~/.midas`, `<cwd>/.midas` and `<cwd>/.agents`:
+ *   - `agent`: midas's own agent definitions (see `src/agents/definitions.ts`),
+ *     so `~/.config/opencode/agents/*.md` is never required.
  *   - `skills`: the `skills/` dir under each root that exists.
  *   - `instructions`: the `AGENTS.md` under each root that exists.
  *   - every other key (notably `mcp`): merged from `midas.jsonc`/`midas.json`
@@ -42,8 +45,12 @@ export function agentsProjectDir(cwd: string): string {
  *
  * opencode's own discovery is turned off separately in `startServer`.
  */
-export function midasOpencodeConfig(cwd: string): Record<string, unknown> {
-  const config: Record<string, unknown> = {};
+export function midasOpencodeConfig(
+  cwd: string,
+  options: { disabledSkills?: ReadonlySet<string> } = {},
+): Record<string, unknown> {
+  // Midas owns its agents; a `midas.jsonc` in any root can still override them.
+  const config: Record<string, unknown> = { agent: midasAgents() };
   const files = [
     join(midasConfigDir(), "midas.jsonc"),
     join(midasConfigDir(), "midas.json"),
@@ -59,7 +66,15 @@ export function midasOpencodeConfig(cwd: string): Record<string, unknown> {
   }
 
   const roots = [midasConfigDir(), midasProjectDir(cwd), agentsProjectDir(cwd)];
-  const skills = roots.map((root) => join(root, "skills")).filter((dir) => existsSync(dir));
+  // opencode reads `skills` (as `skills.paths`) only at server start, so a
+  // session toggle takes a restart. With nothing disabled we keep passing the
+  // roots (nested skills stay discoverable); once something is disabled we pass
+  // the individual enabled skill folders instead.
+  const disabled = options.disabledSkills;
+  const skills =
+    disabled && disabled.size > 0
+      ? listSkills(cwd).filter((skill) => !disabled.has(skill.name)).map((skill) => skill.path)
+      : roots.map((root) => join(root, "skills")).filter((dir) => existsSync(dir));
   if (skills.length > 0) config.skills = skills;
   const instructions = roots.map((root) => join(root, "AGENTS.md")).filter((file) => existsSync(file));
   if (instructions.length > 0) config.instructions = instructions;
@@ -193,24 +208,10 @@ export interface PiSettings {
   voiceSttCommand?: string;
   /** Warm the speech model at startup so `/voice` starts instantly (default true). */
   voicePreload?: boolean;
-  /** Command whose stdin/stdout speak the PersonaPlex helper protocol for `/speech`. */
-  speechCommand?: string;
-  /** Warm the PersonaPlex model at startup so `/speech` is instant (default false; ~9.5 GB). */
-  speechPreload?: boolean;
-  /** PersonaPlex voice preset for `/speech` (default NATM0). */
-  speechVoice?: string;
-  /** PersonaPlex system prompt for `/speech`; defaults to a concise assistant. */
-  speechPrompt?: string;
-  /** Compile PersonaPlex kernels for faster steps after a one-time warmup. */
-  speechCompile?: boolean;
-  /** How a spoken turn reaches the coding agent: auto (model gate), always, never. */
-  speechDelegate?: "auto" | "always" | "never";
   /** Per-agent "Last Used" model ref (`provider/model`), used when no specific override is set. */
   agentLastUsed?: Record<string, string>;
   /** Per-agent reasoning level chosen alongside its specific model. */
   agentThinkingLevels?: Record<string, string>;
-  /** Salted scrypt hash of the /remote password (never the password itself). */
-  remotePasswordHash?: string;
   [key: string]: unknown;
 }
 

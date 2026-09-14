@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth, type Terminal } from "@earendil-works/pi-tui";
 import { initTheme as initPiTheme } from "@earendil-works/pi-coding-agent";
 import { stripAnsi } from "../lib/ansi.ts";
+import { Transcript } from "../state/transcript.ts";
 import { initTheme } from "../theme/theme.ts";
-import { submitAction, ensureDispatcherOnSubmit, WorkingIndicator, voiceToggle, voiceFrameTitle, speechFrameTitle, inputFrameTitle, exitVoiceOnEscape, pickAgentModelRef, pickAgentThinking, resolveSlashName } from "./app.ts";
+import { MidasApp, submitAction, ensureDispatcherOnSubmit, WorkingIndicator, voiceToggle, voiceFrameTitle, exitVoiceOnEscape, isCtrlCPress, pickAgentModelRef, pickAgentThinking, resolveSlashName } from "./app.ts";
 
 initPiTheme(undefined, false);
 initTheme(undefined);
@@ -24,6 +25,32 @@ function indicator(label: string, tone: "thinking" | "running", pad: number) {
   );
 }
 
+class TestTerminal implements Terminal {
+  columns = 120;
+  rows = 40;
+  kittyProtocolActive = false;
+  started = false;
+
+  start(): void { this.started = true; }
+  stop(): void { this.started = false; }
+  async drainInput(): Promise<void> {}
+  write(): void {}
+  moveBy(): void {}
+  hideCursor(): void {}
+  showCursor(): void {}
+  clearLine(): void {}
+  clearFromCursor(): void {}
+  clearScreen(): void {}
+  setTitle(): void {}
+  setProgress(): void {}
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 test("a long running label is truncated inside the right padding", () => {
   const width = 40;
   const pad = 2;
@@ -38,6 +65,129 @@ test("a long running label is truncated inside the right padding", () => {
 test("a short status line is left untouched", () => {
   const lines = indicator("Thinking", "thinking", 1).render(80);
   assert.equal(plain(lines[0]!), " ⠋ Thinking");
+});
+
+test("a running OpenCode task uses the two-line subagent status", () => {
+  const tool = {
+    kind: "tool" as const,
+    id: "task-1",
+    callID: "task-1",
+    tool: "task",
+    status: "running" as const,
+    input: { subagent_type: "explore", description: "Inspect Lightning feature gaps" },
+    start: 0,
+  };
+  const status = new WorkingIndicator(
+    () => ({ id: tool.id, label: "Running Subagents (1 task)", tone: "running", tool }),
+    () => "⠋",
+    () => 2,
+    () => undefined,
+    () => {},
+  );
+  assert.deepEqual(status.render(80).map(plain), [
+    "  ⠋ Running Subagents (1 task):",
+    "    ⠋ Explore: Inspect Lightning feature gaps",
+  ]);
+});
+
+test("the model catalog is resolved before the terminal paints its first frame", async () => {
+  const terminal = new TestTerminal();
+  const agents = deferred<Array<{ name: string; mode: string }>>();
+  const models = deferred<Array<{ providerID: string; modelID: string; name: string; providerName: string }>>();
+  const transcript = new Transcript();
+  const controller = {
+    id: undefined,
+    title: undefined,
+    transcript,
+    listAgents: () => agents.promise,
+    listModels: () => models.promise,
+    listCommands: async () => [],
+    mcpServerNames: async () => [],
+    defaultModel: async () => undefined,
+    setAgent(): void {},
+    setModel(): void {},
+    setVariant(): void {},
+    dispose(): void {},
+  } as never;
+  const app = new MidasApp({
+    controller,
+    cwd: process.cwd(),
+    settings: { tuiMode: "regular", voicePreload: false, agentLastUsed: { main: "openai/gpt-5.6-sol" } },
+    model: { providerID: "openai", modelID: "gpt-5.6-sol", name: "placeholder", providerName: "openai" },
+    cachedModels: [],
+    terminal,
+  });
+
+  const running = app.run();
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(terminal.started, false, "terminal must wait for startup catalogs");
+
+    models.resolve([
+      { providerID: "openai", modelID: "gpt-5.6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI" },
+    ]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(terminal.started, false, "terminal must wait for the agent catalog too");
+
+    agents.resolve([{ name: "main", mode: "primary" }]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(terminal.started, true);
+    const footer = (app as unknown as { footer: { render(width: number): string[] } }).footer;
+    assert.match(plain(footer.render(120)[0]!), /GPT 5\.6 Sol/);
+    assert.doesNotMatch(plain(footer.render(120)[0]!), /Placeholder/);
+  } finally {
+    agents.resolve([{ name: "main", mode: "primary" }]);
+    models.resolve([]);
+    app.quit();
+    await running;
+  }
+});
+
+test("a cached model catalog makes startup wait only for agents", async () => {
+  const terminal = new TestTerminal();
+  const agents = deferred<Array<{ name: string; mode: string }>>();
+  const models = deferred<Array<{ providerID: string; modelID: string; name: string; providerName: string }>>();
+  const catalog = [
+    { providerID: "openai", modelID: "gpt-5.6-sol", name: "GPT-5.6 Sol", providerName: "OpenAI" },
+  ];
+  const controller = {
+    id: undefined,
+    title: undefined,
+    transcript: new Transcript(),
+    listAgents: () => agents.promise,
+    listModels: () => models.promise,
+    listCommands: async () => [],
+    mcpServerNames: async () => [],
+    defaultModel: async () => undefined,
+    setAgent(): void {},
+    setModel(): void {},
+    setVariant(): void {},
+    dispose(): void {},
+  } as never;
+  const app = new MidasApp({
+    controller,
+    cwd: process.cwd(),
+    settings: { tuiMode: "regular", voicePreload: false, agentLastUsed: { main: "openai/gpt-5.6-sol" } },
+    model: { providerID: "openai", modelID: "gpt-5.6-sol", name: "placeholder", providerName: "openai" },
+    cachedModels: catalog,
+    terminal,
+  });
+
+  const running = app.run();
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(terminal.started, false);
+    agents.resolve([{ name: "main", mode: "primary" }]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(terminal.started, true, "a slow live model refresh must not block a warm start");
+    const footer = (app as unknown as { footer: { render(width: number): string[] } }).footer;
+    assert.match(plain(footer.render(120)[0]!), /GPT 5\.6 Sol/);
+  } finally {
+    agents.resolve([{ name: "main", mode: "primary" }]);
+    models.resolve(catalog);
+    app.quit();
+    await running;
+  }
 });
 
 test("multitask queues a busy prompt like every other mode", () => {
@@ -106,26 +256,10 @@ test("voice toggles on and off explicitly and flips with no argument", () => {
 });
 
 test("the voice title shows Loading then Listening while active", () => {
-  assert.equal(voiceFrameTitle({ voice: true, ready: false, orchestrator: true }), "Voice: Loading");
-  assert.equal(voiceFrameTitle({ voice: true, ready: true, orchestrator: true }), "Voice: Listening");
-  assert.equal(voiceFrameTitle({ voice: true, ready: true, orchestrator: false }), "Voice: Listening");
-  assert.equal(voiceFrameTitle({ voice: false, ready: false, orchestrator: true }), undefined);
-  assert.equal(voiceFrameTitle({ voice: false, ready: true, orchestrator: false }), undefined);
-});
-
-test("the speech title shows Loading then Listening while active", () => {
-  assert.equal(speechFrameTitle({ speech: true, ready: false, orchestrator: true }), "Speech: Loading");
-  assert.equal(speechFrameTitle({ speech: true, ready: true, orchestrator: false }), "Speech: Listening");
-  assert.equal(speechFrameTitle({ speech: false, ready: true, orchestrator: true }), undefined);
-});
-
-test("the input frame title prefers speech over voice", () => {
-  assert.equal(
-    inputFrameTitle({ voice: true, speech: true, ready: true, orchestrator: false }),
-    "Speech: Listening",
-  );
-  assert.equal(inputFrameTitle({ voice: true, speech: false, ready: true, orchestrator: false }), "Voice: Listening");
-  assert.equal(inputFrameTitle({ voice: false, speech: false, ready: true, orchestrator: true }), undefined);
+  assert.equal(voiceFrameTitle({ voice: true, ready: false }), "Voice: Loading");
+  assert.equal(voiceFrameTitle({ voice: true, ready: true }), "Voice: Listening");
+  assert.equal(voiceFrameTitle({ voice: false, ready: false }), undefined);
+  assert.equal(voiceFrameTitle({ voice: false, ready: true }), undefined);
 });
 
 test("agent model precedence: session, override, config, last used", () => {
@@ -152,11 +286,16 @@ test("slash names resolve exactly, then by the top fuzzy match", () => {
   assert.equal(resolveSlashName(names, "zzz"), "zzz");
 });
 
-test("escape exits voice or speech only while listening and not in autocomplete", () => {
+test("escape exits voice only while listening and not in autocomplete", () => {
   assert.equal(exitVoiceOnEscape({ voiceActive: true, escape: true, autocomplete: false }), true);
   assert.equal(exitVoiceOnEscape({ voiceActive: true, escape: true, autocomplete: true }), false);
   assert.equal(exitVoiceOnEscape({ voiceActive: false, escape: true, autocomplete: false }), false);
   assert.equal(exitVoiceOnEscape({ voiceActive: true, escape: false, autocomplete: false }), false);
-  assert.equal(exitVoiceOnEscape({ voiceActive: false, speechActive: true, escape: true, autocomplete: false }), true);
-  assert.equal(exitVoiceOnEscape({ voiceActive: false, speechActive: true, escape: true, autocomplete: true }), false);
+});
+
+test("ctrl+c only acts on presses, not Kitty repeats or releases", () => {
+  assert.equal(isCtrlCPress("\x03"), true);
+  assert.equal(isCtrlCPress("\x1b[99;5:1u"), true);
+  assert.equal(isCtrlCPress("\x1b[99;5:2u"), false);
+  assert.equal(isCtrlCPress("\x1b[99;5:3u"), false);
 });

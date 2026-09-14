@@ -40,6 +40,7 @@ export class ThinkingPicker implements Component {
     private onSelect: (level: string) => void,
     private onSetDefault: (level: string) => void,
     private onCancel: () => void,
+    private title = "Thinking",
   ) {
     this.items = levels.map((level) => {
       const full = LEVEL_DESCRIPTIONS[level] ?? "";
@@ -99,7 +100,8 @@ export class ThinkingPicker implements Component {
     const total = Math.max(3, width);
     const inner = total - 2;
     const border = (text: string) => t.fg("borderAccent", text);
-    const title = total >= 16 ? " Thinking " : "";
+    const titleLabel = ` ${this.title} `;
+    const title = total >= titleLabel.length + 6 ? titleLabel : "";
     const top =
       border("╭─") + t.fg("borderAccent", title) + border("─".repeat(Math.max(0, total - 3 - title.length)) + "╮");
     const rows: string[] = [];

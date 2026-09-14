@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { Message, Part } from "@opencode-ai/sdk";
-import { Transcript, formatApiError, type MessageView } from "./transcript.ts";
+import { Transcript, formatApiError, isNetworkError, type MessageView } from "./transcript.ts";
 
 const assistant = (id: string): Message =>
   ({ id, role: "assistant", sessionID: "ses", mode: "task", time: { created: 1 }, tokens: {}, cost: 0 }) as unknown as Message;
@@ -138,4 +138,34 @@ test("an assistant connection error surfaces the network message", () => {
     transcript.messages[0]!.error,
     "No internet connection: couldn't reach the model API. Check your network and try again.",
   );
+});
+
+test("isNetworkError only matches connection-style failures", () => {
+  assert.equal(isNetworkError("getaddrinfo ENOTFOUND api.example.com"), true);
+  assert.equal(isNetworkError("Cannot connect to API: Unable to connect."), true);
+  assert.equal(isNetworkError("Rate limit exceeded for model"), false);
+});
+
+test("the reconnecting flag tracks a retry and clears on any other phase", () => {
+  const transcript = new Transcript();
+  transcript.setPhase("busy");
+  transcript.setPhase("retry");
+  assert.equal(transcript.reconnecting, false, "a plain retry is not a reconnect");
+
+  transcript.setReconnecting(true);
+  assert.equal(transcript.reconnecting, true);
+
+  // A retry that resolves into busy/idle means the connection is usable again.
+  transcript.setPhase("busy");
+  assert.equal(transcript.reconnecting, false, "busy clears reconnecting");
+  assert.equal(transcript.phase, "busy");
+
+  transcript.setPhase("retry");
+  transcript.setReconnecting(true);
+  transcript.setPhase("idle");
+  assert.equal(transcript.reconnecting, false, "idle clears reconnecting");
+
+  // Re-entering retry without a fresh network failure must not resurrect it.
+  transcript.setPhase("retry");
+  assert.equal(transcript.reconnecting, false);
 });

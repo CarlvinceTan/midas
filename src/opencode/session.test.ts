@@ -38,6 +38,30 @@ test("setTitle persists the title and keeps it on the controller", async () => {
   assert.equal(stored.title, "Fix the parser bug");
 });
 
+test("reconnect swaps clients and reloads the same session", async () => {
+  const stored = { id: "s3", title: "Before" };
+  const controller = new SessionController({ client: fakeClient(stored) as never, cwd: "/x" });
+  await controller.resume("s3");
+
+  const reloaded = { id: "s3", title: "After restart" };
+  let messagesCalls = 0;
+  const next = {
+    session: {
+      get: async () => session(reloaded.id, reloaded.title),
+      messages: async () => {
+        messagesCalls += 1;
+        return [];
+      },
+    },
+    event: { subscribe: async () => ({ stream: (async function* () {})() }) },
+  };
+  await controller.reconnect({ client: next as never });
+
+  assert.equal(controller.id, "s3", "the same session is kept across the restart");
+  assert.equal(controller.title, "After restart", "the reloaded session comes from the new client");
+  assert.equal(messagesCalls, 1);
+});
+
 test("resume falls back to an empty title when the session lookup fails", async () => {
   const client = {
     session: {
@@ -88,6 +112,82 @@ test("shouldSteer treats only an idle session as a fresh turn", () => {
   assert.equal(shouldSteer("retry"), true);
 });
 
+/** A client whose event stream is fed by `send`, so event timing is deterministic. */
+function eventClient() {
+  const queue: unknown[] = [];
+  const waiters: Array<() => void> = [];
+  const stream = (async function* () {
+    for (;;) {
+      if (queue.length === 0) await new Promise<void>((resolve) => waiters.push(resolve));
+      const next = queue.shift();
+      if (next === undefined) return;
+      yield next;
+    }
+  })();
+  return {
+    client: {
+      session: { get: async () => session("s1", "t"), messages: async () => [] },
+      event: { subscribe: async () => ({ stream }) },
+    },
+    send(event: unknown) {
+      queue.push(event);
+      waiters.shift()?.();
+    },
+  };
+}
+
+const settle = async (): Promise<void> => {
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+};
+
+const retryEvent = (message: string) => ({
+  type: "session.status",
+  properties: { sessionID: "s1", status: { type: "retry", attempt: 1, message, next: 100 } },
+});
+
+test("a retry caused by a dropped connection marks the session as reconnecting", async () => {
+  const { client, send } = eventClient();
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  send(retryEvent("TypeError: fetch failed"));
+  await settle();
+  assert.equal(controller.transcript.phase, "retry");
+  assert.equal(controller.transcript.reconnecting, true);
+});
+
+test("a retry without a network cause stays a plain retry", async () => {
+  const { client, send } = eventClient();
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  send(retryEvent("Rate limit exceeded for model"));
+  await settle();
+  assert.equal(controller.transcript.phase, "retry");
+  assert.equal(controller.transcript.reconnecting, false);
+});
+
+test("a network error mid-turn flips to reconnecting, and idle clears it", async () => {
+  const { client, send } = eventClient();
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  // The turn must be in flight for an error to mean "reconnecting".
+  controller.transcript.setPhase("busy");
+  send({
+    type: "session.error",
+    properties: {
+      sessionID: "s1",
+      error: { name: "APIError", data: { message: "Cannot connect to API: Unable to connect." } },
+    },
+  });
+  await settle();
+  assert.equal(controller.transcript.phase, "retry");
+  assert.equal(controller.transcript.reconnecting, true);
+
+  send({ type: "session.idle", properties: { sessionID: "s1" } });
+  await settle();
+  assert.equal(controller.transcript.phase, "idle");
+  assert.equal(controller.transcript.reconnecting, false, "idle clears reconnecting");
+});
+
 test("steerPrompt maps attachments to v2 file attachments", () => {
   assert.deepEqual(steerPrompt("look", [{ mime: "image/png", filename: "a.png", url: "data:image/png;base64,AA" }]), {
     prompt: { text: "look", files: [{ uri: "data:image/png;base64,AA", name: "a.png" }] },
@@ -112,11 +212,12 @@ test("a busy prompt is admitted as a v2 steer with mapped files", async () => {
   ]);
 });
 
-test("an idle prompt keeps the v1 path with model and agent", async () => {
+test("an idle prompt keeps the v1 path with model, thinking variant and agent", async () => {
   const { client, clientV2, v1, v2 } = promptFake();
   const controller = new SessionController({ client: client as never, clientV2: clientV2 as never, cwd: "/x" });
   await controller.resume("s1");
   controller.setModel({ providerID: "anthropic", modelID: "claude-sonnet" });
+  controller.setVariant("high");
   controller.setAgent("plan");
   await controller.prompt("hello");
   assert.equal(v2.length, 0);
@@ -127,10 +228,21 @@ test("an idle prompt keeps the v1 path with model and agent", async () => {
       body: {
         parts: [{ type: "text", text: "hello" }],
         model: { providerID: "anthropic", modelID: "claude-sonnet" },
+        variant: "high",
         agent: "plan",
       },
     },
   ]);
+});
+
+test("clearing the thinking variant omits it from a fresh prompt", async () => {
+  const { client, v1 } = promptFake();
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  controller.setVariant("high");
+  controller.setVariant(undefined);
+  await controller.prompt("hello");
+  assert.equal(v1[0]?.body?.variant, undefined);
 });
 
 test("a busy prompt falls back to v1 when the v2 steer is rejected or throws", async () => {

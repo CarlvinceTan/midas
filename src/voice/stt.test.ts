@@ -85,6 +85,27 @@ test("VoiceController preloads, then listens and pauses with the model warm", ()
   assert.deepEqual(sentCommands(written), ["listen", "pause", "listen", "stop"]);
 });
 
+test("a silent gap does not wipe the in-progress transcript", () => {
+  const { child, stdout } = fakeChild();
+  const texts: Array<[string, string]> = [];
+  const controller = new VoiceController({
+    command: "fake",
+    spawn: () => child as never,
+    onText: (committed, partial) => texts.push([committed, partial]),
+    onError: () => {},
+  });
+  controller.listen();
+  stdout.write('{"type":"partial","text":"hello world"}\n');
+  // During a noisy pause the streaming model drops its un-finalized tail and
+  // reports an empty partial; that must not erase what was already recognised.
+  stdout.write('{"type":"partial","text":""}\n');
+  assert.deepEqual(texts.at(-1), ["", "hello world"], "empty partial cleared the transcript");
+  // Real speech after the gap still replaces the transcript normally.
+  stdout.write('{"type":"partial","text":"hello world again"}\n');
+  assert.deepEqual(texts.at(-1), ["", "hello world again"]);
+  controller.stop();
+});
+
 test("VoiceController reports ready once, on the ready event or first text", () => {
   const { child, stdout } = fakeChild();
   let ready = 0;

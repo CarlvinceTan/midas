@@ -202,13 +202,13 @@ export async function runTask(board: TaskBoard, id: string, execute: Worker = wo
     });
   } catch (error) {
     const current = board.get(id);
-    // A pause/cancel request is not a failure: record the intended state.
+    // A halt/cancel request is not a failure: record the intended state.
     if (current.requestedAction === "pause") {
-      board.update(id, (t) => { t.status = "paused"; t.requestedAction = undefined; t.detail = "Paused"; });
+      board.update(id, (t) => { t.status = "blocked"; t.requestedAction = undefined; t.detail = "Halted"; });
       return;
     }
     if (current.requestedAction === "cancel") {
-      board.update(id, (t) => { t.status = "cancelled"; t.requestedAction = undefined; t.detail = "Cancelled"; });
+      board.update(id, (t) => { t.status = "cancelled"; t.requestedAction = undefined; t.progress = undefined; t.detail = "Cancelled"; });
       return;
     }
     // A failure before the attempt was recorded already leaves the task `new`, so
@@ -273,7 +273,7 @@ const mergeAgentResolve: ConflictResolver = async (task, cwd, output) => {
       path: { id: session.id }, query: { directory: cwd }, signal: abort.signal,
       body: {
         agent: MERGE_AGENT,
-        parts: [{ type: "text", text: `An automated merge for task ${task.id} ("${task.title}") hit conflicts in this worktree. Conflicted files:\n${conflicts}\n\nResolve every conflict and stage each resolved file. Do not commit.` }],
+        parts: [{ type: "text", text: `An automated merge for task ${task.id} ("${task.title}") hit conflicts in this checkout. Conflicted files:\n${conflicts}\n\nResolve every conflict and stage each resolved file. Do not commit.` }],
       },
     }) as unknown as { info?: { error?: unknown }; parts?: Array<{ type: string; text?: string }> };
     if (result.info?.error) throw new Error(`Merge agent failed: ${JSON.stringify(result.info.error)}`);
@@ -393,7 +393,7 @@ export async function mergeTask(board: TaskBoard, id: string, output: OutputSink
         if (await gitAsync(board.cwd, "status", "--porcelain") !== before) throw new Error("Integration checks changed files");
         if (staged) await gitAsync(board.cwd, "commit", "--no-edit");
         const result = await gitAsync(board.cwd, "rev-parse", "HEAD");
-        board.update(id, (t) => { t.merge = "merged"; t.mergedCommit = result; t.mergeBlocked = undefined; t.detail = `Merged into ${task.target}`; });
+        board.update(id, (t) => { t.merge = "merged"; t.mergedCommit = result; t.mergeBlocked = undefined; t.progress = undefined; t.detail = `Merged into ${task.target}`; });
       } catch (error) {
         // Checks failed or dirtied the tree: roll the staged merge back without
         // disturbing unrelated local changes.

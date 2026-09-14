@@ -1,7 +1,7 @@
 import { BashExecutionComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { BashView } from "../../state/transcript.ts";
-import { markRenderedLines } from "../../lib/ansi.ts";
+import { markRenderedLines, stripBold } from "../../lib/ansi.ts";
 import { RoundedDialogFrame } from "../rounded-frame.ts";
 
 /**
@@ -20,7 +20,10 @@ export class BashBox implements Component {
   constructor(private part: BashView, ui: TUI, expanded: boolean) {
     this.impl = new BashExecutionComponent(part.command, ui, part.exclude);
     this.impl.setExpanded(expanded);
-    this.frame = new RoundedDialogFrame();
+    // pi already insets its header/output text by one column, which is the single
+    // space the prompt card uses inside its border. Giving the frame a pad of 0
+    // keeps the shell box aligned with the cards above it instead of double-inseting.
+    this.frame = new RoundedDialogFrame(() => 0);
     this.frame.addChild(this.impl);
   }
 
@@ -31,8 +34,9 @@ export class BashBox implements Component {
   render(width: number): string[] {
     this.sync();
     // The frame converts pi's plain rules in place, so only the rendered lines
-    // need the selection bounds that pi's component does not emit itself.
-    return markRenderedLines(this.frame.render(width));
+    // need the selection bounds that pi's component does not emit itself. pi
+    // bolds the `$ command` header; the transcript keeps it at normal weight.
+    return markRenderedLines(this.frame.render(width)).map((line) => stripBold(line));
   }
 
   private sync(): void {

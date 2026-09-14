@@ -14,11 +14,27 @@ interface Entry extends QuestionOption {
   isOther?: boolean;
 }
 
+/** Per-question cursor/answer state, kept so ←/→ can revisit answered questions. */
+interface QState {
+  selected: number;
+  picked: Set<string>;
+  custom: string;
+  customCursor: number;
+  customScroll: number;
+  editing: boolean;
+}
+
 const OTHER_LABEL = "Other";
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
 /** The free-text answer wraps and scrolls within this many visible rows. */
 const OTHER_MAX_LINES = 3;
-/** Two-space indent that aligns the answer under the "Other" label's text. */
-const OTHER_INDENT = 2;
+/** Width of the `[x] ` checkbox prefix, so the answer lines up under the label. */
+const OTHER_INDENT = 4;
+/** Extra inset for the option rows and their descriptions: one column each side. */
+const OPTION_INDENT = 1;
+/** Column the option label / description / typed answer share. */
+const LABEL_INDENT = OPTION_INDENT + OTHER_INDENT;
 
 /** One grapheme in the wrapped free-text answer, with its index in the source. */
 interface InputCell {
@@ -54,29 +70,106 @@ const graphemes = (text: string): Array<{ segment: string; index: number }> => {
   return result;
 };
 
-/** Wrap the answer on grapheme boundaries, honouring explicit newlines. */
+/** A run of graphemes that wraps as a unit: a word, a whitespace gap, or a newline. */
+interface InputToken {
+  kind: "word" | "space" | "break";
+  cells: InputCell[];
+  width: number;
+  start: number;
+}
+
+/** Split the answer into word/whitespace/newline runs, preserving source indices. */
+function tokenizeInput(text: string): InputToken[] {
+  const tokens: InputToken[] = [];
+  for (const { segment, index } of graphemes(text)) {
+    const kind: InputToken["kind"] = segment === "\n" ? "break" : /\s/.test(segment) ? "space" : "word";
+    const width = kind === "break" ? 0 : Math.max(0, visibleWidth(segment));
+    const last = tokens[tokens.length - 1];
+    if (last && last.kind === kind && kind !== "break") {
+      last.cells.push({ index, text: segment, width });
+      last.width += width;
+    } else {
+      tokens.push({ kind, cells: kind === "break" ? [] : [{ index, text: segment, width }], width, start: index });
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Wrap the answer on word boundaries, honouring explicit newlines.
+ *
+ * A word is kept whole whenever it fits on a line of its own, and the
+ * whitespace at a wrap point stays on the line it broke from (or is dropped),
+ * so every continuation line starts with a full word rather than a dangling
+ * space. Only a word longer than the field itself is ever split.
+ */
 function layoutInput(text: string, width: number): InputRow[] {
   const limit = Math.max(1, width);
   const rows: InputRow[] = [];
   let cells: InputCell[] = [];
-  let rowStart = 0;
   let col = 0;
+  let rowStart = 0;
+  /** True at the start of the answer and just after an explicit newline. */
+  let hardStart = true;
+  /** Whitespace waiting to be attached to the row before the next word. */
+  let pending: InputToken | null = null;
+
   const flush = (end: number, next: number): void => {
     rows.push({ cells, start: rowStart, end });
     cells = [];
     col = 0;
     rowStart = next;
+    hardStart = false;
+    pending = null;
   };
-  for (const { segment, index } of graphemes(text)) {
-    if (segment === "\n") {
-      flush(index, index + segment.length);
+  const append = (token: InputToken): void => {
+    for (const cell of token.cells) cells.push(cell);
+    col += token.width;
+  };
+
+  for (const token of tokenizeInput(text)) {
+    if (token.kind === "break") {
+      if (pending && cells.length > 0 && col + pending.width <= limit) append(pending);
+      pending = null;
+      flush(token.start, token.start + 1);
+      hardStart = true;
       continue;
     }
-    const w = Math.max(0, visibleWidth(segment));
-    if (col > 0 && col + w > limit) flush(index, index);
-    cells.push({ index, text: segment, width: w });
-    col += w;
+    if (token.kind === "space") {
+      if (pending && cells.length > 0 && col + pending.width <= limit) append(pending);
+      // Indentation at a real line start is kept; whitespace after a wrap is not.
+      if (cells.length === 0 && hardStart) append(token);
+      else pending = token;
+      continue;
+    }
+    // A word: decide where its leading whitespace (if any) lands.
+    if (pending) {
+      if (cells.length === 0 || col + pending.width > limit) {
+        // The space cannot sit on this row; drop it so the word starts flush.
+        pending = null;
+      } else if (col + pending.width + token.width <= limit) {
+        append(pending);
+        pending = null;
+      } else {
+        // The word moves down; the space stays at the end of this row.
+        append(pending);
+        pending = null;
+        flush(token.start, token.start);
+      }
+    }
+    if (col > 0 && col + token.width > limit) flush(token.start, token.start);
+    if (token.width <= limit) {
+      append(token);
+      continue;
+    }
+    // A single word wider than the field: break it at the row edge.
+    for (const cell of token.cells) {
+      if (col > 0 && col + cell.width > limit) flush(cell.index, cell.index);
+      cells.push(cell);
+      col += cell.width;
+    }
   }
+  if (pending && cells.length > 0 && col + pending.width <= limit) append(pending);
   rows.push({ cells, start: rowStart, end: text.length });
   return rows;
 }
@@ -127,7 +220,11 @@ export class QuestionDialog implements Component {
   private customCursor = 0;
   private customScroll = 0;
   private editing = false;
+  private pasting = false;
+  private pasteBuffer = "";
   private readonly answers: string[][];
+  /** Per-question UI state, indexed by question. */
+  private readonly states: Array<QState | undefined> = [];
   /** Rendered geometry for routing clicks on option rows. */
   private entryHit: Array<{ y: number; index: number }> = [];
   /** Rendered geometry for routing clicks into the free-text answer. */
@@ -152,33 +249,91 @@ export class QuestionDialog implements Component {
     return [...options, { label: OTHER_LABEL, description: "Type your own answer", isOther: true }];
   }
 
-  private advance(): void {
-    this.index += 1;
+  /** Snapshot the live fields so an answered question can be revisited later. */
+  private snapshot(): QState {
+    return {
+      selected: this.selected,
+      picked: new Set(this.picked),
+      custom: this.custom,
+      customCursor: this.customCursor,
+      customScroll: this.customScroll,
+      editing: this.editing,
+    };
+  }
+
+  private reset(): void {
     this.selected = 0;
     this.picked = new Set();
     this.custom = "";
     this.customCursor = 0;
     this.customScroll = 0;
     this.editing = false;
-    if (this.index >= this.request.questions.length) this.onAnswer(this.answers);
   }
 
-  private submit(entries: Entry[]): void {
+  private saveState(): void {
+    this.states[this.index] = this.snapshot();
+  }
+
+  private loadState(index: number): void {
+    const state = this.states[index];
+    if (!state) return this.reset();
+    this.selected = state.selected;
+    this.picked = new Set(state.picked);
+    this.custom = state.custom;
+    this.customCursor = state.customCursor;
+    this.customScroll = state.customScroll;
+    this.editing = state.editing;
+  }
+
+  /**
+   * Record this question's current choice, returning whether it is answered.
+   * A single-choice question is answered by the highlighted option; a
+   * multi-choice one needs at least one box ticked or text typed.
+   */
+  private commit(): boolean {
     const prompt = this.prompt;
-    if (!prompt) return this.onAnswer(this.answers);
-    const entry = entries[this.selected];
-    const text = this.custom.trim();
+    if (!prompt) return true;
+    const entry = this.entries()[this.selected];
     if (prompt.multiple) {
       const answers = [...this.picked];
+      const text = this.custom.trim();
       if (text) answers.push(text);
       this.answers[this.index] = answers;
-    } else if (entry?.isOther) {
-      if (!text) return; // Nothing typed yet: keep editing instead of sending empty.
-      this.answers[this.index] = [text];
-    } else {
-      this.answers[this.index] = [entry?.label ?? ""];
+      return answers.length > 0;
     }
-    this.advance();
+    if (entry?.isOther) {
+      const text = this.custom.trim();
+      this.answers[this.index] = text ? [text] : [];
+      return text.length > 0;
+    }
+    const label = entry?.label ?? "";
+    this.answers[this.index] = label ? [label] : [];
+    return Boolean(label);
+  }
+
+  /**
+   * Move to a neighbouring question. Right is blocked until the current
+   * question is answered; Left always works so an answer can be revised.
+   * Neither end wraps around.
+   */
+  private moveQuestion(delta: number): void {
+    const to = this.index + delta;
+    if (to < 0 || to >= this.request.questions.length) return;
+    if (delta > 0 && !this.commit()) return;
+    if (delta < 0) this.commit();
+    this.saveState();
+    this.index = to;
+    this.loadState(to);
+  }
+
+  /** Confirm the current question and advance, submitting after the last one. */
+  private confirm(): void {
+    if (!this.commit()) return;
+    const next = this.index + 1;
+    if (next >= this.request.questions.length) return this.onAnswer(this.answers);
+    this.saveState();
+    this.index = next;
+    this.loadState(next);
   }
 
   private clampCursor(): number {
@@ -187,7 +342,8 @@ export class QuestionDialog implements Component {
 
   /** Move the option selection by `delta`, focusing the answer when it lands there. */
   private moveSelection(delta: number, entries: Entry[]): void {
-    this.selected = (this.selected + delta + entries.length) % entries.length;
+    // Clamp rather than wrap: Up at the first option and Down at the last stay put.
+    this.selected = Math.max(0, Math.min(entries.length - 1, this.selected + delta));
     this.editing = false;
     if (entries[this.selected]?.isOther) this.customCursor = this.custom.length;
   }
@@ -198,6 +354,36 @@ export class QuestionDialog implements Component {
     this.custom = this.custom.slice(0, cursor) + normalized + this.custom.slice(cursor);
     this.customCursor = cursor + normalized.length;
     this.editing = true;
+  }
+
+  /** Buffer terminal bracketed-paste sequences and insert their text into Other. */
+  private handlePaste(data: string, entries: Entry[]): boolean {
+    const start = data.indexOf(PASTE_START);
+    if (!this.pasting && start < 0) return false;
+
+    if (!this.pasting) {
+      this.pasting = true;
+      this.pasteBuffer = "";
+      data = data.slice(start + PASTE_START.length);
+    }
+    this.pasteBuffer += data;
+
+    const end = this.pasteBuffer.indexOf(PASTE_END);
+    if (end < 0) return true;
+    const pasted = this.pasteBuffer.slice(0, end);
+    const remaining = this.pasteBuffer.slice(end + PASTE_END.length);
+    this.pasting = false;
+    this.pasteBuffer = "";
+
+    if (entries[this.selected]?.isOther) {
+      const cleaned = pasted
+        .replace(/\r\n?/g, "\n")
+        .replace(/\t/g, "    ")
+        .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, "");
+      if (cleaned) this.insertCustom(cleaned);
+    }
+    if (remaining) this.handleInput(remaining);
+    return true;
   }
 
   /** Arrow/backspace/Enter handling for the free-text answer. */
@@ -218,7 +404,7 @@ export class QuestionDialog implements Component {
         this.insertCustom("\n");
         return;
       }
-      this.submit(entries);
+      this.confirm();
       return;
     }
     if (matchesKey(data, "up") || matchesKey(data, "down")) {
@@ -271,11 +457,19 @@ export class QuestionDialog implements Component {
   handleInput(data: string): void {
     const prompt = this.prompt;
     if (!prompt) return this.onAnswer(this.answers);
-    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) return this.onReject();
     const entries = this.entries();
+    if (this.handlePaste(data, entries)) return;
+    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) return this.onReject();
+    const entry = entries[this.selected];
+
+    // ←/→ change question, except while the free-text answer has focus, where
+    // they move the caret so that answer can still be edited.
+    if (matchesKey(data, "left") || matchesKey(data, "right")) {
+      if (entry?.isOther && this.editing) return this.handleOtherInput(data, entries);
+      return this.moveQuestion(matchesKey(data, "right") ? 1 : -1);
+    }
 
     if (matchesKey(data, "up")) {
-      const entry = entries[this.selected];
       if (entry?.isOther) {
         // Inside the answer, Up moves between lines until it reaches the top.
         const rows = layoutInput(this.custom, this.lastWrapWidth());
@@ -284,7 +478,6 @@ export class QuestionDialog implements Component {
       return this.moveSelection(-1, entries);
     }
     if (matchesKey(data, "down")) {
-      const entry = entries[this.selected];
       if (entry?.isOther) {
         const rows = layoutInput(this.custom, this.lastWrapWidth());
         if (locateCursor(rows, this.clampCursor()).row < rows.length - 1) return this.handleOtherInput(data, entries);
@@ -292,7 +485,6 @@ export class QuestionDialog implements Component {
       return this.moveSelection(1, entries);
     }
 
-    const entry = entries[this.selected];
     if (entry?.isOther) {
       return this.handleOtherInput(data, entries);
     }
@@ -305,7 +497,7 @@ export class QuestionDialog implements Component {
       }
       return;
     }
-    if (matchesKey(data, "enter")) this.submit(entries);
+    if (matchesKey(data, "enter")) this.confirm();
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -371,47 +563,56 @@ export class QuestionDialog implements Component {
       const fill = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
       return border("│") + gutter + markContent(fitted) + fill + gutter + border("│");
     };
-    // The prompt's header and the question counter share the border
-    // (`╭─ Remove UX: Question 1/2 ─╮`) rather than taking body rows, so the
-    // panel stays compact. The header is truncated to whatever fits the border.
+    // The counter sits in the top rule — `╭─ Question 1/2 ───╮` — and the body
+    // shows the question itself: a blank line, the question, a blank line, then
+    // the options. The prompt's `header` is intentionally not rendered.
     const prompt = this.prompt;
-    const count = this.request.questions.length;
-    const header = prompt?.header?.trim();
-    const counter = count > 1 ? `Question ${this.index + 1}/${count}` : "";
-    const labelText = header && counter ? `${header}: ${counter}` : header || counter || "Question";
-    const available = total - 5;
-    const shown = available > 0 ? truncateToWidth(labelText, available, "…") : "";
-    const title = shown ? ` ${shown} ` : "";
-    const top =
-      edge(border("╭─") + t.fg("borderAccent", title) + border("─".repeat(Math.max(0, total - 3 - title.length)) + "╮"));
     const bottom = edge(border("╰" + "─".repeat(inner) + "╯"));
 
     this.entryHit = [];
     this.inputHit = undefined;
-    if (!prompt) return [top, row(t.fg("text", "Done")), bottom];
+    if (!prompt) return [edge(border("╭" + "─".repeat(inner) + "╮")), row(t.fg("text", "Done")), bottom];
 
-    // Just the question in the primary text colour, then the options directly
-    // below it: no header or spacer line.
+    const count = this.request.questions.length;
+    const title = total >= 12 ? ` Question ${this.index + 1}/${count} ` : "";
+    const top = edge(
+      border("╭─") + t.fg("borderAccent", title) + border("─".repeat(Math.max(0, total - 3 - title.length)) + "╮"),
+    );
+
     const body: string[] = [];
-    for (const line of wrap(prompt.question, contentWidth)) body.push(row(t.fg("text", line)));
+    body.push(row(""));
+    // The counter sits in the top rule as `╭─ Question n/m `, so its text starts
+    // one column past the `╭─`. Line the question up under it.
+    const counterIndent = Math.max(0, 2 - inset);
+    for (const line of wrap(prompt.question, contentWidth - counterIndent * 2)) {
+      body.push(row(" ".repeat(counterIndent) + t.fg("text", line)));
+    }
+    body.push(row(""));
 
     const entries = this.entries();
     entries.forEach((entry, idx) => {
       const active = idx === this.selected;
       this.entryHit.push({ y: body.length + 1, index: idx });
-      const marker = active ? t.fg("accent", "→ ") : "  ";
-      const check = prompt.multiple && !entry.isOther ? (this.picked.has(entry.label) ? "[x] " : "[ ] ") : "";
+      const chosen = entry.isOther
+        ? active || this.custom.trim().length > 0
+        : prompt.multiple
+          ? this.picked.has(entry.label)
+          : active;
+      const check = chosen ? "[x] " : "[ ] ";
       const label = active ? t.fg("accent", entry.label) : t.fg("text", entry.label);
-      body.push(row(`${marker}${check}${label}`));
+      body.push(row(" ".repeat(OPTION_INDENT) + `${check}${label}`));
       if (!entry.isOther && entry.description) {
-        for (const line of wrap(entry.description, contentWidth - 4)) body.push(row("    " + t.fg("muted", line)));
+        // Match the label indent on the right so the description never hugs the
+        // border: the same padding on both sides.
+        for (const line of wrap(entry.description, contentWidth - LABEL_INDENT * 2)) {
+          body.push(row(" ".repeat(LABEL_INDENT) + t.fg("muted", line)));
+        }
       }
-      // The typed answer sits directly under "Other", aligned with its label, as
-      // a wrapped block that scrolls to keep the cursor visible.
+      // The typed answer sits under "Other", indented to line up with the option
+      // label text, as a wrapped block that scrolls to keep the cursor visible.
       if (entry.isOther && (active || this.custom)) {
-        const fieldWidth = Math.max(1, contentWidth - OTHER_INDENT);
         // Reserve a column so the block cursor never touches the right padding.
-        const wrapWidth = Math.max(1, fieldWidth - 1);
+        const wrapWidth = Math.max(1, contentWidth - LABEL_INDENT - 1);
         const rows = layoutInput(this.custom, wrapWidth);
         const cursor = Math.max(0, Math.min(this.custom.length, this.customCursor));
         const cursorPos = locateCursor(rows, cursor);
@@ -426,10 +627,10 @@ export class QuestionDialog implements Component {
         const firstY = body.length + 1;
         visible.forEach((line, offset) => {
           const isCursorRow = active && this.customScroll + offset === cursorPos.row;
-          body.push(row(" ".repeat(OTHER_INDENT) + this.renderInputLine(line, isCursorRow, cursor)));
+          body.push(row(" ".repeat(LABEL_INDENT) + this.renderInputLine(line, isCursorRow, cursor)));
         });
         this.inputHit = {
-          textX: 1 + inset + OTHER_INDENT,
+          textX: 1 + inset + LABEL_INDENT,
           firstY,
           count: visible.length,
           rows,
@@ -438,14 +639,8 @@ export class QuestionDialog implements Component {
         };
       }
     });
-
-    const otherActive = entries[this.selected]?.isOther === true;
-    const hint = otherActive
-      ? "Enter to confirm · Shift+Enter newline · Esc to reject"
-      : prompt.multiple
-        ? "Space to toggle · Enter to confirm · Esc to reject"
-        : "Enter to select · Esc to reject";
-    body.push(row(t.fg("dim", hint)));
+    // A blank row separates the last option (or its answer) from the bottom rule.
+    body.push(row(""));
 
     return [top, ...body, bottom];
   }

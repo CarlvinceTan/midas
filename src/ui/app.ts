@@ -3,6 +3,8 @@ import {
   Container,
   Editor,
   fuzzyFilter,
+  isKeyRelease,
+  isKeyRepeat,
   isViewportTUI,
   matchesKey,
   ProcessTerminal,
@@ -17,6 +19,7 @@ import {
   type OverlayOptions,
   type ScrollView,
   type SlashCommand,
+  type Terminal,
   type TUI,
   type TuiMouseEvent,
   type TuiMouseEventResult,
@@ -32,13 +35,13 @@ import type { AgentChoice, AuthMethod, AuthPrompt, CommandChoice, SessionControl
 import { loadCachedAgentStats, readAgentStats, refreshAgentStats } from "../opencode/agent-stats.ts";
 import type { OpencodeClient, Session } from "@opencode-ai/sdk";
 import type { OpencodeClient as OpencodeV2Client } from "@opencode-ai/sdk/v2";
-import { Transcript, type MessageView, type PartView } from "../state/transcript.ts";
+import { Transcript, type MessageView, type PartView, type ToolView } from "../state/transcript.ts";
 import { computeRuns, formatSeconds, liveRunId } from "./run-model.ts";
 import { RunView } from "./components/run-view.ts";
-import { setMcpServerNames, toolLiveText } from "./components/tool-call.ts";
+import { renderSubagentTool, setMcpServerNames, toolLiveText } from "./components/tool-call.ts";
 import { QueuedMessages } from "./components/queued-messages.ts";
 import { FooterComponent, formatCwdForFooter, type FooterData } from "./components/footer.ts";
-import { Toast, type ToastLevel } from "./components/toast.ts";
+import { Toast, toastWidth, type ToastLevel } from "./components/toast.ts";
 import { PermissionDialog, type PermissionResponse } from "./components/permission-dialog.ts";
 import { QuestionDialog } from "./components/question-dialog.ts";
 import { ModelPicker, modelDisplayLabel, modelDisplayParts } from "./components/model-picker.ts";
@@ -48,21 +51,16 @@ import { AGENT_LABELS, loadAgentSessions, readAgentTranscript, type AgentSession
 import { upsertMidasSession } from "../lib/session-store.ts";
 import { StatsView } from "./components/stats-view.ts";
 import { TasksView } from "./components/tasks-view.ts";
-import { TaskBoard, gitAsync } from "../tasks/board.ts";
+import { TaskBoard, gitAsync, type Task } from "../tasks/board.ts";
 import { removeTask } from "../tasks/runner.ts";
 import { VoiceController, composeVoiceText, defaultVoiceCommand } from "../voice/stt.ts";
-import { SpeechController, defaultSpeechCommand } from "../speech/controller.ts";
-import { looksLikeChitChat } from "../speech/gate.ts";
 import { SessionHeader, StartupHeader } from "./components/startup-header.ts";
 import { OptionPicker } from "./components/option-picker.ts";
 import { PromptDialog } from "./components/prompt-dialog.ts";
-import { PasswordDialog } from "./components/password-dialog.ts";
-import { RemoteManager } from "../remote/manager.ts";
-import { hashPassword } from "../remote/auth.ts";
 import { SPINNER_FRAMES } from "./components/tool-call.ts";
 import { FramedEditorDock, PanelOverlay, RoundedDialogFrame } from "./rounded-frame.ts";
 import { BlankLine, PaddedBlock, createChatViewport } from "./layout.ts";
-import { getEditorTheme, getSettingsListTheme, initTheme, theme } from "../theme/theme.ts";
+import { DEFAULT_THEME_NAME, getEditorTheme, getSettingsListTheme, initTheme, theme } from "../theme/theme.ts";
 import { GenerationRate, RateDisplay } from "../features/rate.ts";
 import { ContextDisplay, LiveContext, type ContextUsage } from "../features/live-context.ts";
 import { markContent, truncateColored } from "../lib/ansi.ts";
@@ -155,6 +153,11 @@ export function voiceToggle(args: string, current: boolean): boolean | undefined
   return undefined;
 }
 
+/** Match one intentional Ctrl+C, excluding Kitty key-repeat and release events. */
+export function isCtrlCPress(data: string): boolean {
+  return matchesKey(data, "ctrl+c") && !isKeyRepeat(data) && !isKeyRelease(data);
+}
+
 /**
  * Title drawn into the input frame's top rule. Voice dictation outranks the
  * orchestrator's Multitask mode; with both off there is no title.
@@ -182,47 +185,28 @@ export function resolveSlashName(names: string[], name: string): string {
   return fuzzyFilter(names, name, (candidate) => candidate)[0] ?? name;
 }
 
-export function voiceFrameTitle(input: { voice: boolean; ready: boolean; orchestrator: boolean }): string | undefined {
+/** Canonical voice state label, shared by the frame title and its toasts. */
+export function voiceStateLabel(ready: boolean): string {
+  // Until the helper confirms it is listening, a model may still be downloading.
+  return ready ? "Voice: Listening" : "Voice: Loading";
+}
+
+export function voiceFrameTitle(input: { voice: boolean; ready: boolean }): string | undefined {
   // Multitask is indicated by the tomato frame colour, not a title.
   if (!input.voice) return undefined;
-  // Until the helper confirms it is listening, a model may still be downloading.
-  return input.ready ? "Voice: Listening" : "Voice: Loading";
-}
-
-/** Frame title for the PersonaPlex `/speech` mode, matching the `/voice` shape. */
-export function speechFrameTitle(input: { speech: boolean; ready: boolean; orchestrator: boolean }): string | undefined {
-  if (!input.speech) return undefined;
-  // PersonaPlex warms its model on first use; until then show Loading.
-  return input.ready ? "Speech: Listening" : "Speech: Loading";
+  return voiceStateLabel(input.ready);
 }
 
 /**
- * Title drawn into the input frame's top rule. `/speech` outranks `/voice` (they
- * are mutually exclusive), and both outrank the orchestrator's Multitask mode.
- */
-export function inputFrameTitle(input: {
-  voice: boolean;
-  speech: boolean;
-  ready: boolean;
-  orchestrator: boolean;
-}): string | undefined {
-  return (
-    speechFrameTitle({ speech: input.speech, ready: input.ready, orchestrator: input.orchestrator }) ??
-    voiceFrameTitle({ voice: input.voice, ready: input.ready, orchestrator: input.orchestrator })
-  );
-}
-
-/**
- * Esc leaves voice/speech mode only while listening and with no autocomplete
- * menu open, so the same key can still dismiss the menu or abort a run otherwise.
+ * Esc leaves voice mode only while listening and with no autocomplete menu
+ * open, so the same key can still dismiss the menu or abort a run otherwise.
  */
 export function exitVoiceOnEscape(input: {
   voiceActive: boolean;
-  speechActive?: boolean;
   escape: boolean;
   autocomplete: boolean;
 }): boolean {
-  return (input.voiceActive || input.speechActive === true) && input.escape && !input.autocomplete;
+  return input.voiceActive && input.escape && !input.autocomplete;
 }
 
 interface LoginEntry {
@@ -237,9 +221,24 @@ export interface AppOptions {
   cwd: string;
   settings: PiSettings;
   model?: ModelChoice;
+  /** Last successful catalog, used to render the selected model without waiting. */
+  cachedModels?: ModelChoice[];
+  /** Persist a successful live catalog for the next launch. */
+  cacheModels?: (models: ModelChoice[]) => void;
   agent?: string;
-  /** The opencode server clients, for /remote (absent in headless runs). */
+  /** The opencode server clients (absent in headless runs). */
   opencode?: { client: OpencodeClient; clientV2?: OpencodeV2Client };
+  /**
+   * Relaunch the opencode server with fresh config (used when disabling skills
+   * needs new `skills.paths`) and return the new clients. Absent in headless
+   * runs, where `/skills` stays read-only.
+   */
+  restartBackend?: (disabledSkills: ReadonlySet<string>) => Promise<{ client: OpencodeClient; clientV2?: OpencodeV2Client }>;
+  /**
+   * The terminal to render into. Defaults to the real process terminal; the
+   * remote gateway injects a browser-backed one so it can run the actual TUI.
+   */
+  terminal?: Terminal;
 }
 
 interface TranscriptOptions {
@@ -355,7 +354,7 @@ export class WorkingIndicator implements Component {
   constructor(
     private status: (
       width: number,
-    ) => { id: string; label: string; tone?: "thinking" | "running"; detail?: string } | undefined,
+    ) => { id: string; label: string; tone?: "thinking" | "running"; detail?: string; tool?: ToolView } | undefined,
     private frame: () => string,
     private getPad: () => number,
     private expandedFor: () => string | undefined,
@@ -395,6 +394,14 @@ export class WorkingIndicator implements Component {
     // The transcript composer owns the single blank row above the status; adding
     // one here too would double the gap. No trailing blank, either, so the row
     // doesn't add space before the input box.
+    if (status.tool?.tool === "task") {
+      const expanded = this.expandedFor() === status.id;
+      return renderSubagentTool(status.tool, contentWidth, expanded, this.frame()).map((line, index) => {
+        const linePad = index === 0 ? pad : `${pad}  `;
+        const lineWidth = Math.max(1, contentWidth - (index === 0 ? 0 : 2));
+        return linePad + markContent(truncateColored(line, lineWidth));
+      });
+    }
     const lines = [pad + markContent(truncateColored(`${glyph} ${label}`, contentWidth))];
     // Clicking reveals only the current action's detail (e.g. streaming thinking).
     if (status.detail && this.expandedFor() === status.id) {
@@ -664,22 +671,10 @@ export class MidasApp {
    * paused (not killed) when voice stops, so re-entering `/voice` is instant.
    */
   private voiceController?: VoiceController;
-  /** True while `/speech` runs the PersonaPlex conversation loop. */
-  private speechActive = false;
-  /** False from activation until the PersonaPlex helper reports it is warmed. */
-  private speechReady = false;
-  /**
-   * Long-lived PersonaPlex backend. The helper process is preloaded and paused
-   * (not killed) between turns; the last few spoken turns form the gate context.
-   */
-  private speechController?: SpeechController;
-  private speechContext: string[] = [];
   /** Branch checked out in the primary worktree, shown in the pinned header. */
   private currentBranch: string | undefined;
   private branchTimer?: ReturnType<typeof setInterval>;
   private agentInitialized = false;
-  /** Lazily created by /remote so runs without an opencode server stay clean. */
-  private remote?: RemoteManager;
   private mcpNames: string[] = [];
   private commands: CommandChoice[] = [];
   private customCommands: CustomCommand[] = [];
@@ -712,6 +707,8 @@ export class MidasApp {
   private wasBusy = false;
   private skillEntries: SkillEntry[] = [];
   private skillNames: string[] = [];
+  /** Skills disabled for this session (applied by restarting OpenCode). */
+  private disabledSkills = new Set<string>();
   private pendingResourcesRefresh = false;
   private timer: NodeJS.Timeout | undefined;
   private resolveDone: (() => void) | undefined;
@@ -721,16 +718,25 @@ export class MidasApp {
 
   constructor(private options: AppOptions) {
     this.hideThinking = options.settings.hideThinkingBlock ?? true;
+    // Resolve the requested agent synchronously. Waiting for the agent catalog
+    // made the first footer frame use main's model before switching agents.
+    this.activeAgent = options.agent === BOARD_WORKER_AGENT ? DEFAULT_AGENT : options.agent ?? DEFAULT_AGENT;
+    this.models = [...(options.cachedModels ?? [])];
     // Seed the last-selected model from disk before the first paint so the
     // footer never flashes "No Model" while the catalogs are being fetched.
-    this.model = options.model ?? this.initialModel();
+    const initial = options.model ?? this.initialModel();
+    this.model = initial
+      ? this.models.find((model) => model.providerID === initial.providerID && model.modelID === initial.modelID) ?? initial
+      : undefined;
     // Restore a resumed session's stored title; a fresh session stays untitled.
     this.title = usableSessionTitle(options.controller.title);
     this.skillEntries = listSkills(this.options.cwd);
     this.skillNames = this.skillEntries.map((skill) => skill.name);
 
     try {
-      initPiTheme(typeof options.settings.theme === "string" ? options.settings.theme : undefined, false);
+      // Same resolved name as midas's own theme so pi-rendered pieces (e.g.
+      // syntax-highlighted code blocks) use the same palette.
+      initPiTheme(typeof options.settings.theme === "string" ? options.settings.theme : DEFAULT_THEME_NAME, false);
     } catch {
       // Falls back to the built-in theme.
     }
@@ -744,7 +750,7 @@ export class MidasApp {
         : (text) => theme().getThinkingBorderColor(this.currentThinking())(text);
 
     const fullscreen = options.settings.tuiMode !== "regular";
-    const terminal = new ProcessTerminal();
+    const terminal = options.terminal ?? new ProcessTerminal();
     this.tui = fullscreen
       ? new TuiAltScreen(terminal, false, undefined, {
           // Fullscreen owns the jump-to-end pill: it composites on the last row
@@ -791,12 +797,6 @@ export class MidasApp {
         path: formatCwdForFooter(this.options.cwd.replace(/[\x00-\x1f\x7f]/g, "?"), homedir()),
         branch: this.currentBranch,
         resources: `${this.skillNames.length} skills • ${this.mcpNames.length} mcps`,
-        remoteActive: this.remote?.active ?? false,
-        onRemoteClick: () => {
-          const url = this.remote?.url;
-          if (url) this.copyRemoteLink(url);
-          else this.warn("Remote is off. Run /remote to start it.");
-        },
         hidden: !this.terminalTitleEnabled(),
       }),
       () => rowPad(options.cwd),
@@ -903,6 +903,17 @@ export class MidasApp {
     // input, before the first paint.
     await this.restoreSessionShellState(this.options.controller.id);
     this.restoreDraft(this.options.controller.id);
+    // A warm model cache avoids waiting on OpenCode's comparatively expensive
+    // provider catalog. Cold starts still resolve both catalogs in parallel so
+    // the first visible model is final; warm starts refresh models afterward.
+    const coldModels = this.models.length === 0 ? this.loadModels() : undefined;
+    await Promise.all([this.loadAgents(), coldModels]);
+    let refreshModels = coldModels === undefined;
+    if (!this.effectiveModelIsCatalogued() && coldModels === undefined) {
+      await this.loadModels();
+      refreshModels = false;
+    }
+    this.syncControllerModel();
     this.tui.start();
     this.watchSettings();
     // A resumed session has no editor history yet; seed it from its prompts.
@@ -920,14 +931,6 @@ export class MidasApp {
         if (!this.voiceActive) this.ensureVoiceController().preload();
       }, 2500);
       warmVoice.unref?.();
-    }
-    // Warm PersonaPlex so `/speech` starts instantly. Opt-in: the 8-bit model
-    // holds ~9.5 GB, so it is off unless `speechPreload` is set.
-    if (this.speechPreloadEnabled()) {
-      const warmSpeech = setTimeout(() => {
-        if (!this.speechActive) this.ensureSpeechController().preload();
-      }, 4000);
-      warmSpeech.unref?.();
     }
     this.statsTimer = setInterval(() => void this.refreshStatsInBackground(), 10 * 60_000);
     this.statsTimer.unref?.();
@@ -956,8 +959,7 @@ export class MidasApp {
       // scroll) even after the user scrolled up to read history.
       this.tui.requestRender();
     });
-    await this.loadAgents();
-    void this.loadRest();
+    void this.loadRest(refreshModels);
     // Track the checkout's branch for the header; polled because the branch can
     // change outside Midas (a shell `git switch`, or an autonomous promotion).
     void this.refreshBranch();
@@ -1073,10 +1075,9 @@ export class MidasApp {
   }
 
   /**
-   * Model to show before any catalog request returns. The last-selected model
-   * is a synchronous disk read, so the first frame paints the right name
-   * instead of "No Model"; `loadRest` upgrades it to the catalogue entry (for
-   * the display name, cost and context limit) once models arrive.
+   * Synchronous fallback while the model catalog is loading. `loadModels`
+   * upgrades it to the catalog entry (display name, cost and context limit)
+   * before the terminal paints its first frame.
    */
   private initialModel(): ModelChoice | undefined {
     const last = readLastSelectedModel();
@@ -1111,14 +1112,15 @@ export class MidasApp {
     this.tui.requestRender();
   }
 
-  /** Slower catalogs (models, commands, MCPs) load after the first render. */
-  private async loadRest(): Promise<void> {
-    // Models first: the footer's name and context window come from the catalog,
-    // so resolve it (and repaint) before the other catalogs.
+  /** Resolve the model catalog and hydrate the selected model's display data. */
+  private async loadModels(): Promise<void> {
     try {
-      this.models = await this.withTimeout(this.options.controller.listModels());
+      const loaded = await this.withTimeout(this.options.controller.listModels());
+      // Keep a valid cache if a transient provider failure returns no models.
+      if (loaded.length > 0 || this.models.length === 0) this.models = loaded;
+      if (loaded.length > 0) this.options.cacheModels?.(loaded);
     } catch {
-      this.models = [];
+      // A cached catalog remains a better display fallback than an empty one.
     }
     // The constructor already seeded the last-selected model; only fall back to
     // opencode's configured default when there is none.
@@ -1132,20 +1134,36 @@ export class MidasApp {
     this.handleModelUpdate();
     this.syncControllerModel();
     this.tui.requestRender();
+  }
 
-    try {
-      this.commands = (await this.withTimeout(this.options.controller.listCommands())).filter(
-        (command) => !HIDDEN_COMMANDS.has(command.name),
-      );
-    } catch {
-      this.commands = [];
-    }
+  private effectiveModelIsCatalogued(): boolean {
+    const selected = this.effectiveModel();
+    return Boolean(selected && this.models.some(
+      (model) => model.providerID === selected.providerID && model.modelID === selected.modelID,
+    ));
+  }
+
+  /** Non-critical catalogs and any warm-cache refresh load concurrently. */
+  private async loadRest(refreshModels = false): Promise<void> {
+    const models = refreshModels ? this.loadModels() : Promise.resolve();
+    const commands = (async () => {
+      try {
+        this.commands = (await this.withTimeout(this.options.controller.listCommands())).filter(
+          (command) => !HIDDEN_COMMANDS.has(command.name),
+        );
+      } catch {
+        this.commands = [];
+      }
+    })();
+    const mcps = (async () => {
+      try {
+        this.setMcpNames(await this.withTimeout(this.options.controller.mcpServerNames()));
+      } catch {
+        this.setMcpNames([]);
+      }
+    })();
+    await Promise.all([models, commands, mcps]);
     this.installAutocomplete();
-    try {
-      this.setMcpNames(await this.withTimeout(this.options.controller.mcpServerNames()));
-    } catch {
-      this.setMcpNames([]);
-    }
     if (this.pendingTitleSource) this.maybeGenerateTitle(true, this.pendingTitleSource);
     this.tui.requestRender();
   }
@@ -1283,8 +1301,10 @@ export class MidasApp {
     (this.options.settings as Record<string, unknown>).agentThinkingLevels = map;
     updateGlobalSetting("agentThinkingLevels", map);
     if (agent === this.activeAgent) {
-      if (level) this.thinkingLevel = level;
-      else {
+      if (level) {
+        this.thinkingLevel = level;
+        this.options.controller.setVariant(level === "off" ? undefined : level);
+      } else {
         const model = this.effectiveModel();
         if (model) this.restoreThinkingForModel(model.providerID, model.modelID);
       }
@@ -1340,7 +1360,11 @@ export class MidasApp {
 
   private syncControllerModel(): void {
     const model = this.effectiveModel();
-    if (model) this.options.controller.setModel({ providerID: model.providerID, modelID: model.modelID });
+    if (model) {
+      this.options.controller.setModel({ providerID: model.providerID, modelID: model.modelID });
+      const level = this.thinkingForAgent(this.activeAgent, model);
+      this.options.controller.setVariant(level === "off" ? undefined : level);
+    }
   }
 
   private cycleThinking(): void {
@@ -1397,6 +1421,7 @@ export class MidasApp {
     }
     if (transcript.phase === "idle") return "Idle";
     if (transcript.permissions.length > 0) return this.statusText || "Waiting for approval";
+    if (transcript.reconnecting) return this.workingStatus()?.label || this.statusText || "Reconnecting";
     if (transcript.phase === "retry") return this.workingStatus()?.label || this.statusText || "Retrying";
     return this.statusText || this.mechanicalStatus(last);
   }
@@ -1416,7 +1441,7 @@ export class MidasApp {
    */
   private workingStatus(
     width = 100,
-  ): { id: string; label: string; tone?: "thinking" | "running"; detail?: string } | undefined {
+  ): { id: string; label: string; tone?: "thinking" | "running"; detail?: string; tool?: ToolView } | undefined {
     const transcript = this.options.controller.transcript;
     const now = Date.now();
     if (transcript.phase === "idle") {
@@ -1424,9 +1449,16 @@ export class MidasApp {
       this.retryStartedAt = undefined;
       return undefined;
     }
-    if (transcript.phase === "retry") {
+    if (transcript.reconnecting || transcript.phase === "retry") {
+      // A dropped connection flips to "Reconnecting" the moment opencode reports
+      // it; a retry without a network cause is just the usual backoff.
       this.retryStartedAt ??= now;
-      return { id: "retry", label: `Retrying for ${formatSeconds(now - this.retryStartedAt)}`, tone: "thinking" };
+      const reconnecting = transcript.reconnecting;
+      return {
+        id: reconnecting ? "reconnecting" : "retry",
+        label: `${reconnecting ? "Reconnecting" : "Retrying"} for ${formatSeconds(now - this.retryStartedAt)}`,
+        tone: "thinking",
+      };
     }
     this.retryStartedAt = undefined;
     if (transcript.permissions.length > 0) {
@@ -1443,7 +1475,7 @@ export class MidasApp {
         const part = message.parts[j]!;
         if (part.kind === "tool" && (part.status === "running" || part.status === "pending")) {
           this.workingSince = undefined;
-          return { id: part.id, label: toolLiveText(part, this.options.cwd, width), tone: "running" };
+          return { id: part.id, label: toolLiveText(part, this.options.cwd, width), tone: "running", tool: part };
         }
         if (part.kind === "bash" && part.status === "running") {
           this.workingSince = undefined;
@@ -1684,97 +1716,23 @@ export class MidasApp {
     const next = args === "on" ? ORCHESTRATOR_AGENT : args === "off" ? DEFAULT_AGENT : this.activeAgent === ORCHESTRATOR_AGENT ? DEFAULT_AGENT : ORCHESTRATOR_AGENT;
     if (!this.agentChoices.includes(next)) { this.fail(`Agent '${next}' is unavailable. Check agent configuration and restart Midas.`); return; }
     this.setActiveAgent(next);
-    if (next === ORCHESTRATOR_AGENT) this.success("Multitask Activated!");
-  }
-
-  private remoteManager(): RemoteManager {
-    if (!this.remote) {
-      const opencode = this.options.opencode;
-      if (!opencode) throw new Error("Remote is unavailable in this run mode");
-      this.remote = new RemoteManager({
-        client: opencode.client,
-        clientV2: opencode.clientV2,
-        cwd: this.options.cwd,
-        getPasswordHash: () => loadPiSettings(this.options.cwd).remotePasswordHash,
-        onChange: () => this.tui.requestRender(),
-      });
-    }
-    return this.remote;
   }
 
   /**
-   * `/remote` — expose this opencode server on a temporary public link. Enabling
-   * is global to the process (all sessions are listed), copies the link on first
-   * enable, and toggles off on a second run. `on|off|refresh|status` are explicit.
-   */
-  private toggleRemote(args: string): void {
-    if (args && args !== "on" && args !== "off" && args !== "refresh" && args !== "status") {
-      this.fail("Usage: /remote [on|off|refresh|status]");
-      return;
-    }
-    let manager: RemoteManager;
-    try {
-      manager = this.remoteManager();
-    } catch (error) {
-      this.fail(error instanceof Error ? error.message : String(error));
-      return;
-    }
-    if (args === "status") {
-      this.warn(manager.active && manager.url ? `Remote on · ${manager.url}` : "Remote off");
-      return;
-    }
-    if (args === "refresh") {
-      if (!manager.active) return this.toggleRemote("on");
-      this.warn("Refreshing remote link…");
-      void manager.refresh().then(
-        (state) => state.url && this.copyRemoteLink(state.url),
-        (error) => this.fail(`Remote refresh failed: ${error instanceof Error ? error.message : String(error)}`),
-      );
-      return;
-    }
-    if (args === "off" || (!args && manager.active)) {
-      void manager.disable().then(() => {
-        this.warn("Remote off");
-        this.tui.requestRender();
-      });
-      return;
-    }
-    if (manager.active && manager.url) return this.copyRemoteLink(manager.url);
-    if (!manager.hasPassword()) {
-      this.fail("Set a Remote password in /settings first, then run /remote");
-      return;
-    }
-    this.warn("Starting remote…");
-    void manager.enable().then(
-      (state) => state.url && this.copyRemoteLink(state.url),
-      (error) => this.fail(`Remote failed: ${error instanceof Error ? error.message : String(error)}`),
-    );
-  }
-
-  private copyRemoteLink(url: string): void {
-    copyToClipboard(url).then(
-      () => this.success("Remote on · link copied"),
-      () => this.warn(`Remote on · ${url}`),
-    );
-  }
-
-  /**
-   * Colour precedence: microphone modes (blue) win while active, then a real
-   * shell command, then multitask (tomato), then the active thinking level.
-   * Multitask tints the frame; the editable text stays the normal colour.
+   * Colour precedence: a real shell command, then multitask (tomato), then the
+   * active thinking level. Microphone modes never recolour the frame, so it
+   * keeps showing the mode it is in (purple when Multitask is off, tomato on).
    */
   private applyEditorBorderColor(text: string = this.editor.getText()): void {
     // Only a bang at the very start is shell mode; a leading space keeps it a
     // normal prompt (and the thinking border), matching `parseShellCommand`.
     const bash = text.startsWith("! ") || text.startsWith("!! ");
     const multitask = this.activeAgent === ORCHESTRATOR_AGENT;
-    this.editor.borderColor = this.voiceActive || this.speechActive
-      ? (value: string) => theme().fg("accent", value)
-      : bash
-        ? (value: string) => theme().fg("bashMode", value)
-        : multitask
-          ? (value: string) => theme().fg("multitask", value)
-          : theme().getThinkingBorderColor(this.currentThinking());
+    this.editor.borderColor = bash
+      ? (value: string) => theme().fg("bashMode", value)
+      : multitask
+        ? (value: string) => theme().fg("multitask", value)
+        : theme().getThinkingBorderColor(this.currentThinking());
   }
 
   private toggleVoice(args: string): void {
@@ -1784,13 +1742,12 @@ export class MidasApp {
   }
 
   /**
-   * Enter or leave `/voice` dictation. Rebuilds the input frame (title + blue
-   * border) and starts/pauses the warm speech controller; the existing input
-   * text is left untouched. The helper is preloaded, so this is near-instant.
+   * Enter or leave `/voice` dictation. Rebuilds the input frame title and
+   * starts/pauses the warm speech controller; the existing input text is left
+   * untouched and the frame keeps its mode colour. The helper is preloaded, so
+   * this is near-instant.
    */
   private setVoiceActive(active: boolean): void {
-    // Microphone modes are mutually exclusive: `/speech` would double-open the mic.
-    if (active && this.speechActive) this.setSpeechActive(false);
     this.voiceActive = active;
     if (active) {
       // Keep whatever was typed before voice as a prefix for the transcript.
@@ -1800,13 +1757,24 @@ export class MidasApp {
       // shows Loading while the model loads.
       this.voiceReady = controller.ready;
       controller.listen();
+      // The frame title already shows Voice: Listening/Loading, so no toast.
     } else {
       this.voiceReady = false;
       this.voiceController?.pause();
     }
+    // Voice owns the input until it is stopped: no caret, no editing.
+    this.setEditorReadOnly(active);
     this.applyEditorBorderColor();
     this.mountEditor();
+    this.tui.setFocus(this.editor);
     this.tui.requestRender();
+  }
+
+  /** Hide the editor caret while a microphone mode owns the input. */
+  private setEditorReadOnly(readOnly: boolean): void {
+    // `cursorVisible` is private on the vendored editor but is the supported
+    // way to suppress the fake cursor without swapping the component out.
+    (this.editor as unknown as { cursorVisible: boolean }).cursorVisible = !readOnly;
   }
 
   /** Create the helper on first use and keep the same instance for the session. */
@@ -1843,12 +1811,12 @@ export class MidasApp {
       onError: (message) => {
         // A preload failure stays quiet; `/voice` surfaces it when it matters.
         if (!this.voiceActive) return;
-        this.options.controller.transcript.addNotice(`Voice: ${message}`);
+        this.fail(`Voice: ${message}`);
         this.setVoiceActive(false);
       },
       onStop: () => {
         if (!this.voiceActive) return;
-        this.options.controller.transcript.addNotice("Voice: microphone stopped.");
+        this.warn("Voice: microphone stopped.");
         this.setVoiceActive(false);
       },
     });
@@ -1864,151 +1832,11 @@ export class MidasApp {
     this.tui.requestRender();
   }
 
-  private toggleSpeech(args: string): void {
-    // `/speech` shares `/voice`'s on/off/blank argument shape.
-    const next = voiceToggle(args, this.speechActive);
-    if (next === undefined) { this.fail("Usage: /speech [on|off]"); return; }
-    this.setSpeechActive(next);
-  }
-
-  /**
-   * Enter or leave `/speech`: PersonaPlex listens, then hands clear requests to
-   * the active agent (main, or the orchestrator when Multitask is on) while it
-   * answers everything else itself. The frame turns blue with a Speech title.
-   */
-  private setSpeechActive(active: boolean): void {
-    // Microphone modes are mutually exclusive: `/speech` would double-open the mic.
-    if (active && this.voiceActive) this.setVoiceActive(false);
-    this.speechActive = active;
-    if (active) {
-      const controller = this.ensureSpeechController();
-      this.speechReady = controller.ready;
-      controller.listen();
-      this.options.controller.transcript.addNotice(
-        this.speechReady
-          ? "Speech listening — speak naturally. Esc to exit."
-          : "Speech loading — PersonaPlex may download on first use.",
-      );
-    } else {
-      this.speechReady = false;
-      this.speechContext = [];
-      this.speechController?.pause();
-      this.options.controller.transcript.addNotice("Speech off.");
-    }
-    this.applyEditorBorderColor();
-    this.mountEditor();
-    this.tui.requestRender();
-  }
-
-  /** Create the PersonaPlex helper on first use and keep it for the session. */
-  private ensureSpeechController(): SpeechController {
-    this.speechController ??= this.createSpeechController();
-    return this.speechController;
-  }
-
-  /** Warm PersonaPlex at startup only when explicitly opted in (~9.5 GB). */
-  private speechPreloadEnabled(): boolean {
-    return this.options.settings.speechPreload === true;
-  }
-
-  private createSpeechController(): SpeechController {
-    const configured = this.options.settings.speechCommand;
-    const command = typeof configured === "string" && configured.trim() ? configured.trim() : undefined;
-    const spec = command ? { command: "/bin/bash", args: ["-lc", command] } : defaultSpeechCommand();
-    const voice = this.options.settings.speechVoice;
-    const prompt = this.options.settings.speechPrompt;
-    const env: NodeJS.ProcessEnv = {};
-    if (typeof voice === "string" && voice.trim()) env.SPEECH_VOICE = voice.trim();
-    if (typeof prompt === "string" && prompt.trim()) env.SPEECH_PROMPT = prompt.trim();
-    if (this.options.settings.speechCompile === true) env.SPEECH_COMPILE = "1";
-    return new SpeechController({
-      ...spec,
-      env: Object.keys(env).length > 0 ? env : undefined,
-      onUtterance: (text) => void this.handleSpeechUtterance(text),
-      onAssistant: (text) => {
-        if (!this.speechActive || !text) return;
-        this.options.controller.transcript.addNotice(`Speech: ${text}`);
-      },
-      onReady: () => {
-        this.speechReady = true;
-        if (this.speechActive) this.mountEditor();
-        this.tui.requestRender();
-      },
-      onError: (message) => {
-        // A preload failure stays quiet; `/speech` surfaces it when it matters.
-        if (!this.speechActive) return;
-        this.options.controller.transcript.addNotice(`Speech: ${message}`);
-        this.setSpeechActive(false);
-      },
-      onStop: () => {
-        if (!this.speechActive) return;
-        this.options.controller.transcript.addNotice("Speech: helper stopped.");
-        this.setSpeechActive(false);
-      },
-    });
-  }
-
-  /**
-   * Route one spoken turn: obvious small talk is answered by PersonaPlex, an
-   * `auto` turn is classified by the active model, and a clear request is
-   * delegated. The helper waits for exactly one `respond`/`skip`.
-   */
-  private async handleSpeechUtterance(text: string): Promise<void> {
-    const utterance = text.trim();
-    if (!this.speechActive || !utterance) return;
-    // Show what was heard; ASR is imperfect and this is the user's only cue.
-    this.options.controller.transcript.addNotice(`Speech heard: “${utterance}”`);
-    const context = this.speechContext;
-    // Keep a short rolling context so the gate can resolve follow-ups.
-    this.speechContext = [...this.speechContext, utterance].slice(-6);
-    const mode = this.options.settings.speechDelegate ?? "auto";
-    if (mode === "never" || (mode === "auto" && looksLikeChitChat(utterance))) {
-      this.speechController?.respond();
-      return;
-    }
-    if (mode === "always") {
-      this.delegateSpeech(utterance);
-      return;
-    }
-    const model = this.effectiveModel();
-    const decision = model
-      ? await this.options.controller.assessSpeechIntent(utterance, context, model)
-      : undefined;
-    if (!this.speechActive) return;
-    if (decision?.clear) this.delegateSpeech(decision.request || utterance);
-    else this.speechController?.respond();
-  }
-
-  /**
-   * Hand a spoken request to the active agent through the normal submission
-   * path. Speech is free-form, so it is never treated as a slash command or a
-   * shell line, and it is queued when a run is already active.
-   */
-  private delegateSpeech(text: string): void {
-    const body = text.trim();
-    if (!body) return;
-    this.options.controller.transcript.addNotice(`Speech → ${this.activeAgent}: ${body}`);
-    this.editor.addToHistory(body);
-    if (!this.title) {
-      const heuristic = capitalize(truncateWords(body.replace(/[`*_#>]/g, ""), this.titleMaxWords()));
-      if (heuristic) {
-        this.title = heuristic;
-        this.tui.requestRender();
-      }
-    }
-    this.maybeGenerateTitle(true, body);
-    if (this.activeAgent === ORCHESTRATOR_AGENT) this.syncDispatcher();
-    const prompt = this.preparePrompt(body, []);
-    if (this.isRunActive()) this.enqueue(prompt);
-    else void this.sendPrompt(prompt.text, prompt.attachments);
-    // The helper is holding the turn open; release it now that the agent has it.
-    this.speechController?.skip();
-  }
-
   private setThinkingLevel(level: string): void {
     this.thinkingLevel = level;
     const model = this.effectiveModel();
     if (model) updateModelThinkingLevel(model.providerID, model.modelID, level);
+    this.options.controller.setVariant(level === "off" ? undefined : level);
     this.options.controller.transcript.addRecord(`Thinking: ${level}`);
     this.editor.borderColor = theme().getThinkingBorderColor(level);
     this.transcriptView.invalidate();
@@ -2027,6 +1855,7 @@ export class MidasApp {
     }
     if (this.model) {
       this.thinkingLevel = thinkingLevelFor(loadPiSettings(this.options.cwd), this.model.providerID, this.model.modelID);
+      this.options.controller.setVariant(this.thinkingLevel === "off" ? undefined : this.thinkingLevel);
     }
     this.editor.borderColor = theme().getThinkingBorderColor(this.currentThinking());
   }
@@ -2034,6 +1863,7 @@ export class MidasApp {
   /** Restore the reasoning level last used with a model without persisting it. */
   private restoreThinkingForModel(providerID: string, modelID: string): void {
     this.thinkingLevel = thinkingLevelFor(loadPiSettings(this.options.cwd), providerID, modelID);
+    this.options.controller.setVariant(this.thinkingLevel === "off" ? undefined : this.thinkingLevel);
     this.editor.borderColor = theme().getThinkingBorderColor(this.currentThinking());
     this.transcriptView.invalidate();
     this.tui.requestRender();
@@ -2347,7 +2177,13 @@ export class MidasApp {
     await new Promise<void>((resolve) => {
       let child: ReturnType<typeof spawn>;
       try {
-        child = spawn("bash", ["-lc", command], { cwd: this.shellCwd, env: process.env });
+        child = spawn("bash", ["-lc", command], {
+          cwd: this.shellCwd,
+          env: process.env,
+          // Lead a process group so cancel/quit can signal the whole tree
+          // (`npm run dev` leaves node running if only bash is signalled).
+          detached: process.platform !== "win32",
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         transcript.appendBashOutput(id, `${message}\n`);
@@ -2384,9 +2220,19 @@ export class MidasApp {
     });
   }
 
+  /** Stop a running `!` command, signalling its whole process group. */
   private killShell(): boolean {
-    if (!this.shellProcess) return false;
-    this.shellProcess.kill("SIGTERM");
+    const child = this.shellProcess;
+    if (!child) return false;
+    const pid = child.pid;
+    if (pid !== undefined && process.platform !== "win32") {
+      try {
+        process.kill(-pid, "SIGTERM");
+      } catch {
+        // Not a group leader (or already gone); fall back to the direct kill.
+      }
+    }
+    try { child.kill("SIGTERM"); } catch { /* already exited */ }
     return true;
   }
 
@@ -2654,8 +2500,6 @@ export class MidasApp {
         "tasks",
         "multitask",
         "voice",
-        "speech",
-        "remote",
         "reload",
         "mcps",
         "skills",
@@ -2693,8 +2537,6 @@ export class MidasApp {
       { name: "tasks", description: "Task board grouped by feature or worktree" },
       { name: "multitask", description: "Toggle orchestration mode (on/off)" },
       { name: "voice", description: "Dictate into the input with the microphone (on/off)" },
-      { name: "speech", description: "Talk to PersonaPlex, which delegates to the agent (on/off)" },
-      { name: "remote", description: "Share all sessions on a temporary public web link (on/off)" },
       { name: "reload", description: "Reload settings, models and resources" },
       { name: "mcps", description: "Manage MCP servers" },
       { name: "skills", description: "Manage skills" },
@@ -2737,8 +2579,6 @@ export class MidasApp {
     if (name === "tasks") return this.openTasks();
     if (name === "multitask") return this.toggleMultitask(args);
     if (name === "voice") return this.toggleVoice(args);
-    if (name === "speech") return this.toggleSpeech(args);
-    if (name === "remote") return this.toggleRemote(args);
     if (name === "reload") return this.doReload();
     if (name === "mcps") return this.openMcps();
     if (name === "skills") return this.openSkills();
@@ -2855,19 +2695,20 @@ export class MidasApp {
 
   private handleGlobalKey(data: string): { consume?: boolean } | undefined {
     if (this.activeOverlay) return undefined;
-    // Esc leaves voice/speech mode without also aborting the running agent.
+    // Esc leaves voice mode without also aborting the running agent.
     if (
       exitVoiceOnEscape({
         voiceActive: this.voiceActive,
-        speechActive: this.speechActive,
         escape: matchesKey(data, "escape"),
         autocomplete: this.editor.isShowingAutocomplete(),
       })
     ) {
-      if (this.speechActive) this.setSpeechActive(false);
-      else this.setVoiceActive(false);
+      this.setVoiceActive(false);
       return { consume: true };
     }
+    // Voice owns the input: `/voice` streams dictation, so typing (or
+    // submitting the stale draft) must not reach the box. Esc above is the exit.
+    if (this.voiceActive) return { consume: true };
     if (matchesKey(data, "up")) {
       if (this.navigateEditorHistory(-1)) return { consume: true };
     } else if (matchesKey(data, "down")) {
@@ -2928,7 +2769,7 @@ export class MidasApp {
         }
       }
     }
-    if (matchesKey(data, "ctrl+c")) {
+    if (isCtrlCPress(data)) {
       if (this.killShell()) return { consume: true };
       // Clear a non-empty draft first; only an empty input aborts or exits.
       if (this.editor.getText().length > 0) {
@@ -3190,28 +3031,6 @@ export class MidasApp {
         values: ["on", "off"],
       },
       {
-        id: "remote-password",
-        label: "Remote password",
-        description: "Unlock password for the /remote public link",
-        currentValue: this.options.settings.remotePasswordHash ? "set" : "not set",
-        submenu: (_current: string, done: (value?: string) => void) =>
-          new PasswordDialog(
-            "Remote password: ",
-            (value) => {
-              const trimmed = value.trim();
-              if (!trimmed) {
-                done();
-                return;
-              }
-              const hash = hashPassword(trimmed);
-              (this.options.settings as Record<string, unknown>).remotePasswordHash = hash;
-              updateGlobalSetting("remotePasswordHash", hash);
-              done("set");
-            },
-            () => done(),
-          ),
-      },
-      {
         id: "skill-commands",
         label: "Skill commands",
         description: "Enable skill commands in the slash menu",
@@ -3224,27 +3043,6 @@ export class MidasApp {
         description: "Load the speech model at startup so /voice is instant",
         currentValue: this.options.settings.voicePreload === false ? "off" : "on",
         values: ["on", "off"],
-      },
-      {
-        id: "speech-preload",
-        label: "Speech preload",
-        description: "Warm PersonaPlex at startup (~9.5 GB) so /speech is instant",
-        currentValue: this.options.settings.speechPreload === true ? "on" : "off",
-        values: ["on", "off"],
-      },
-      {
-        id: "speech-compile",
-        label: "Speech compile",
-        description: "Compile PersonaPlex kernels for faster replies (longer first warmup)",
-        currentValue: this.options.settings.speechCompile === true ? "on" : "off",
-        values: ["on", "off"],
-      },
-      {
-        id: "speech-delegate",
-        label: "Speech delegation",
-        description: "When /speech hands a spoken request to the coding agent",
-        currentValue: this.options.settings.speechDelegate ?? "auto",
-        values: ["auto", "always", "never"],
       },
     ];
     const list = new SettingsList(
@@ -3284,40 +3082,6 @@ export class MidasApp {
               this.voiceReady = false;
               this.mountEditor();
             }
-            break;
-          }
-          case "speech-preload": {
-            const enabled = value === "on";
-            (this.options.settings as Record<string, unknown>).speechPreload = enabled;
-            updateGlobalSetting("speechPreload", enabled);
-            if (this.speechActive) break;
-            if (enabled) {
-              this.ensureSpeechController().preload();
-            } else if (this.speechController) {
-              // Free PersonaPlex without disturbing an active speech session.
-              this.speechController.stop();
-              this.speechController = undefined;
-              this.speechReady = false;
-              this.mountEditor();
-            }
-            break;
-          }
-          case "speech-delegate": {
-            (this.options.settings as Record<string, unknown>).speechDelegate = value;
-            updateGlobalSetting("speechDelegate", value);
-            break;
-          }
-          case "speech-compile": {
-            // Compile is fixed at helper start; recreate an idle helper so it applies.
-            const enabled = value === "on";
-            (this.options.settings as Record<string, unknown>).speechCompile = enabled;
-            updateGlobalSetting("speechCompile", enabled);
-            if (this.speechActive || !this.speechController) break;
-            this.speechController.stop();
-            this.speechController = undefined;
-            this.speechReady = false;
-            if (this.speechPreloadEnabled()) this.ensureSpeechController().preload();
-            this.mountEditor();
             break;
           }
         }
@@ -3419,7 +3183,7 @@ export class MidasApp {
     this.toastHandle?.hide();
     if (this.toastTimer) clearTimeout(this.toastTimer);
     const columns = this.tui.terminal.columns || 80;
-    const width = Math.max(4, Math.min(text.length + 4, columns - 2));
+    const width = toastWidth(text, columns - 2);
     try {
       this.toastHandle = this.tui.showOverlay(new Toast(text, level), {
         anchor: "top-right",
@@ -3587,7 +3351,6 @@ export class MidasApp {
     editorState.cursorVisible = true;
     if (text) this.editor.setText(text);
     this.tui.requestRender();
-    this.success("Undid last prompt");
   }
 
   private openStats(): void {
@@ -3735,7 +3498,7 @@ export class MidasApp {
       const settings = loadPiSettings(this.options.cwd);
       this.options.settings = settings;
       this.hideThinking = settings.hideThinkingBlock ?? true;
-      const themeName = typeof settings.theme === "string" ? settings.theme : undefined;
+      const themeName = typeof settings.theme === "string" ? settings.theme : DEFAULT_THEME_NAME;
       initTheme(themeName);
       try {
         initPiTheme(themeName, false);
@@ -3749,7 +3512,8 @@ export class MidasApp {
       this.transcriptOptions.hideThinking = this.hideThinking;
       this.transcriptOptions.expandedTools = this.expandedTools;
       this.refreshSkills();
-      await this.loadAgents();
+      await Promise.all([this.loadAgents(), this.loadModels()]);
+      this.syncControllerModel();
       await this.loadRest();
       await applyCurrencySetting(this.options.settings.currency);
       this.transcriptView.invalidate();
@@ -3764,6 +3528,8 @@ export class MidasApp {
   private setMcpNames(names: string[]): void {
     this.mcpNames = names;
     setMcpServerNames(names);
+    // Settled activity summaries are cached, so repaint them with MCP names.
+    this.transcriptView.invalidate();
   }
 
   private async openMcps(): Promise<void> {
@@ -3807,18 +3573,60 @@ export class MidasApp {
       ? skills.map((skill) => ({
           id: `skill:${skill.name}`,
           label: skill.name,
-          currentValue: skill.path.replace(homedir(), "~"),
+          currentValue: this.disabledSkills.has(skill.name) ? "disabled" : "enabled",
+          description: skill.path.replace(homedir(), "~"),
+          // Enter/Space cycles the value, which toggles the session state below.
+          values: ["enabled", "disabled"],
         }))
       : [{ id: "none", label: "None configured", currentValue: "add a SKILL.md under .midas or .agents" }];
     const list = new SettingsList(
       items,
       12,
       getSettingsListTheme(),
-      () => this.tui.requestRender(),
+      (id, value) => {
+        if (!id.startsWith("skill:")) return;
+        const name = id.slice("skill:".length);
+        if (this.options.controller.transcript.phase !== "idle") {
+          this.warn("Finish the current turn before changing skills.");
+          // The list already flipped its row; rebuild it from the unchanged set.
+          queueMicrotask(() => this.openSkills());
+          return;
+        }
+        if (value === "disabled") this.disabledSkills.add(name);
+        else this.disabledSkills.delete(name);
+        void this.restartOpencode();
+      },
       () => this.closeOverlay(),
       { enableSearch: false },
     );
     this.showOverlay(new PanelOverlay("Skills", new NoHintList(list)), { width: "70%", maxHeight: "70%" });
+  }
+
+  /**
+   * Relaunch OpenCode so a skill change takes effect: the server only reads
+   * `skills.paths` at startup. The controller reconnects in place, reusing the
+   * same session and transcript, then the catalogs are refreshed.
+   */
+  private async restartOpencode(): Promise<void> {
+    const restart = this.options.restartBackend;
+    if (!restart) {
+      this.fail("Changing skills needs a backend restart, which is unavailable here.");
+      return;
+    }
+    this.warn("Restarting OpenCode to apply skills…");
+    try {
+      const next = await restart(this.disabledSkills);
+      await this.options.controller.reconnect(next);
+      this.options.opencode = next;
+      this.skillEntries = listSkills(this.options.cwd);
+      this.skillNames = this.skillEntries.map((skill) => skill.name);
+      await Promise.all([this.loadAgents(), this.loadModels()]);
+      this.syncControllerModel();
+      await this.loadRest();
+      this.success("Skills updated.");
+    } catch (error) {
+      this.fail(error instanceof Error ? error.message : String(error));
+    }
   }
 
   private async openLogin(): Promise<void> {
@@ -3912,6 +3720,7 @@ export class MidasApp {
       void (async () => {
         try {
           await this.options.controller.addCustomProvider(id, name, (values.baseURL ?? "").trim(), (values.apiKey ?? "").trim());
+          await this.loadModels();
           await this.loadRest();
           this.success(`Added ${name}`);
         } catch (error) {
@@ -4075,10 +3884,26 @@ export class MidasApp {
     }
   }
 
-  private openModelPicker(): void {    if (this.models.length === 0) return;
+  private openModelPicker(): void {
+    if (this.models.length === 0) return;
     const picker = new ModelPicker(
       this.models,
-      (choice) => {
+      (choice) => this.openModelThinkingPicker(choice),
+      () => this.closeOverlay(),
+    );
+    this.showOverlay(picker, { width: "70%", maxHeight: "70%" });
+  }
+
+  /** Complete `/model` with a second, model-scoped thinking choice. */
+  private openModelThinkingPicker(choice: ModelChoice): void {
+    const current = thinkingLevelFor(loadPiSettings(this.options.cwd), choice.providerID, choice.modelID);
+    const defaultLevel =
+      typeof this.options.settings.defaultThinkingLevel === "string" ? this.options.settings.defaultThinkingLevel : "medium";
+    const picker = new ThinkingPicker(
+      THINKING_LEVELS,
+      current,
+      defaultLevel,
+      (level) => {
         const ref = `${choice.providerID}/${choice.modelID}`;
         this.model = choice;
         // Session-local for the active agent; persisted only as its "Last Used"
@@ -4086,23 +3911,34 @@ export class MidasApp {
         this.sessionAgentModels.set(this.activeAgent, ref);
         this.setAgentLastUsed(this.activeAgent, ref);
         this.options.controller.setModel({ providerID: choice.providerID, modelID: choice.modelID });
+        this.thinkingLevel = level;
+        updateModelThinkingLevel(choice.providerID, choice.modelID, level);
+        this.options.controller.setVariant(level === "off" ? undefined : level);
         writeLastSelectedModel({ providerID: choice.providerID, modelID: choice.modelID, name: choice.name });
-        this.restoreThinkingForModel(choice.providerID, choice.modelID);
-        this.options.controller.transcript.addRecord(
-          `Model: ${choice.providerID}/${choice.modelID} • thinking ${this.currentThinking()}`,
-        );
+        this.editor.borderColor = theme().getThinkingBorderColor(level);
+        this.options.controller.transcript.addRecord(`Model: ${ref} • thinking ${level}`);
         this.resetStats();
         this.closeOverlay();
       },
-      () => this.closeOverlay(),
+      (level) => {
+        updateGlobalSetting("defaultThinkingLevel", level);
+        this.success(`Default thinking: ${level}`);
+      },
+      () => this.openModelPicker(),
+      "Model > Thinking",
     );
-    this.showOverlay(picker, { width: "70%", maxHeight: "70%" });
+    this.showOverlay(picker, { width: "64%", maxHeight: "70%" });
   }
 
   /** Mount a dialog in the editor dock (bottom, full width) like pi. */
   private tasksTimer?: ReturnType<typeof setInterval>;
   private dispatchLogOffset = 0;
   private dispatchLogTimer?: ReturnType<typeof setInterval>;
+  /** Signature of the blocked/clarify set already surfaced to the orchestrator. */
+  private attentionSignature = "";
+  /** Last stage signature the status agent produced a phrase for, per task. */
+  private progressSignatures = new Map<string, string>();
+  private titlingTasks = false;
 
   /**
    * Multitask mode runs the board in a detached daemon so task runs and merges
@@ -4157,8 +3993,91 @@ export class MidasApp {
         }
         if (added) { void this.refreshBranch(); this.tui.requestRender(); }
       } catch { /* no log yet */ }
+      this.checkBoardAttention(board);
+      void this.refreshTaskMeta(board);
     }, 1000);
     this.dispatchLogTimer.unref?.();
+  }
+
+  /**
+   * The orchestrator handles blocked/clarify work before anything else. When the
+   * board gains (or changes) such a task, put a prompt at the FRONT of the queue
+   * so it runs right after the current turn and ahead of other queued/steered
+   * messages, then continue. A signature stops it re-firing for the same set.
+   */
+  private checkBoardAttention(board: TaskBoard): void {
+    if (this.activeAgent !== ORCHESTRATOR_AGENT) return;
+    let tasks: Task[];
+    try { tasks = board.read().tasks; } catch { return; }
+    const attention = tasks.filter((task) => task.status === "blocked" || task.status === "clarify");
+    if (attention.length === 0) { this.attentionSignature = ""; return; }
+    const signature = attention.map((task) => `${task.id}:${task.status}`).sort().join("|");
+    if (signature === this.attentionSignature) return;
+    this.attentionSignature = signature;
+    const lines = attention.map((task) => `- ${task.id} [${task.status}] ${task.title}${task.detail ? ` — ${task.detail}` : ""}`);
+    this.options.controller.transcript.addNotice(`Board needs attention: ${attention.map((task) => task.id).join(", ")}`);
+    this.enqueueAt(0, {
+      text: `Board needs your attention before anything else:\n${lines.join("\n")}\n\nAsk me for whatever you need, resolve or re-queue each one, then continue with the rest of the queued work.`,
+      attachments: [],
+    });
+    this.scheduleQueueFlush();
+  }
+
+  /**
+   * Lightweight title + status agent. The title is stable and only regenerated
+   * when the contract's revision moves (the direction changed); the status is a
+   * short stage phrase regenerated whenever the task moves stage. Reasons stay in
+   * the details view, so the right-hand text is always the model's phrase.
+   */
+  private async refreshTaskMeta(board: TaskBoard): Promise<void> {
+    if (this.activeAgent !== ORCHESTRATOR_AGENT || this.titlingTasks) return;
+    const model = this.effectiveModel();
+    if (!model) return;
+    let tasks: Task[];
+    try { tasks = board.read().tasks; } catch { return; }
+    const active = tasks.filter((task) => task.status !== "cancelled" && task.merge !== "merged");
+    if (active.length === 0) return;
+    this.titlingTasks = true;
+    let budget = 6;
+    try {
+      for (const task of active) {
+        if (budget <= 0) break;
+        const source = [
+          task.title,
+          task.instructions,
+          `Scope: ${(task.scope ?? []).join(", ")}`,
+          `State: ${task.status}${task.merge !== "not-merged" ? ` (merge ${task.merge})` : ""}`,
+          task.detail ? `Detail: ${task.detail}` : "",
+        ].filter(Boolean).join("\n");
+
+        // Title: stable unless the contract direction changed.
+        if (task.titledRevision !== task.revision) {
+          budget -= 1;
+          const title = await this.options.controller.generateTaskTitle(source, model, 6);
+          try {
+            board.update(task.id, (t) => {
+              if (title && title !== t.title) t.title = title;
+              t.titledRevision = t.revision;
+            });
+          } catch { /* removed */ }
+        }
+
+        // Status: regenerate when the stage signature changes.
+        const signature = `${task.status}|${task.merge}|${task.attempts.length}`;
+        if (this.progressSignatures.get(task.id) !== signature) {
+          if (budget <= 0) break;
+          budget -= 1;
+          const status = await this.options.controller.generateTaskStatus(source, model, 5);
+          this.progressSignatures.set(task.id, signature);
+          if (status) {
+            try { board.update(task.id, (t) => { t.progress = status; }); } catch { /* removed */ }
+          }
+        }
+      }
+      this.tui.requestRender();
+    } finally {
+      this.titlingTasks = false;
+    }
   }
 
   private openTasks(): void {
@@ -4241,11 +4160,9 @@ export class MidasApp {
     const frame = new RoundedDialogFrame(
       () => Math.min(1, rowPad(this.options.cwd)),
       undefined,
-      inputFrameTitle({
+      voiceFrameTitle({
         voice: this.voiceActive,
-        speech: this.speechActive,
-        ready: this.speechActive ? this.speechReady : this.voiceReady,
-        orchestrator: this.activeAgent === ORCHESTRATOR_AGENT,
+        ready: this.voiceReady,
       }),
       { top: () => this.historyLabel("up"), bottom: () => this.historyLabel("down") },
     );
@@ -4330,9 +4247,9 @@ export class MidasApp {
     this.saveDraftNow();
     this.persistSessionState();
     // The board daemon is detached on purpose; quitting must not kill it.
-    void this.remote?.disable();
+    // Stop a running `!` command and any microphone playback so nothing is left.
+    this.killShell();
     this.voiceController?.stop();
-    this.speechController?.stop();
     if (this.tasksTimer) clearInterval(this.tasksTimer);
     if (this.statsTimer) clearInterval(this.statsTimer);
     if (this.timer) clearInterval(this.timer);

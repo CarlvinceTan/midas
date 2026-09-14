@@ -94,12 +94,12 @@ test("a transient failure past the budget is blocked with a clear detail", async
   assert.match(state.detail ?? "", /fetch failed/);
 });
 
-test("pause and cancel are never retried as transient failures", async (t) => {
+test("halt and cancel are never retried as transient failures", async (t) => {
   const { board } = fixture(t);
-  const paused = board.add(contract);
-  await runTask(board, paused.id, async () => { board.pause(paused.id); throw new TypeError("fetch failed"); });
-  assert.equal(board.get(paused.id).status, "paused");
-  assert.equal(board.get(paused.id).consecutiveFailures, undefined);
+  const halted = board.add(contract);
+  await runTask(board, halted.id, async () => { board.pause(halted.id); throw new TypeError("fetch failed"); });
+  assert.equal(board.get(halted.id).status, "blocked");
+  assert.equal(board.get(halted.id).consecutiveFailures, undefined);
 
   const cancelled = board.add(contract);
   await runTask(board, cancelled.id, async () => { board.cancel(cancelled.id); throw new TypeError("fetch failed"); });

@@ -6,6 +6,7 @@ import { loadPiSettings, midasOpencodeConfig } from "./config/pi.ts";
 import { dim } from "./lib/ansi.ts";
 import { taskCli } from "./tasks/cli.ts";
 import { BOARD_WORKER_AGENT } from "./lib/agents.ts";
+import { readCachedModels, writeCachedModels } from "./lib/model-cache.ts";
 
 interface Cli {
   cwd: string;
@@ -101,7 +102,6 @@ Commands:
   /new /compact /sessions   session management
   /tasks                    grouped task board (Tab: groups/worktrees)
   /multitask [on|off]       orchestration + autonomous board runner (default: off)
-  /remote [on|off|refresh]  share all sessions on a temporary public web link
   /voice [on|off]           dictate into the input with the microphone (default: off)
   /reload                   reload settings, models and resources
   /mcps /skills             manage MCP servers and skills
@@ -173,8 +173,24 @@ async function runPrint(cli: Cli): Promise<void> {
 }
 
 async function runTui(cli: Cli): Promise<void> {
-  const server = await startServer({ cwd: cli.cwd, configContent: JSON.stringify(midasOpencodeConfig(cli.cwd)) });
+  let server = await startServer({ cwd: cli.cwd, configContent: JSON.stringify(midasOpencodeConfig(cli.cwd)) });
   const controller = new SessionController({ client: server.client, clientV2: server.clientV2, cwd: cli.cwd });
+  // Restarting swaps in new config (skills disabled for the session); opencode
+  // only reads `skills.paths` at startup, so a toggle needs a fresh server.
+  const restartBackend = async (disabledSkills: ReadonlySet<string>) => {
+    const next = await startServer({
+      cwd: cli.cwd,
+      configContent: JSON.stringify(midasOpencodeConfig(cli.cwd, { disabledSkills })),
+    });
+    const previous = server;
+    server = next;
+    try {
+      previous.close();
+    } catch {
+      // Already gone.
+    }
+    return { client: next.client, clientV2: next.clientV2 };
+  };
   const settings = loadPiSettings(cli.cwd);
   try {
     if (cli.session) await controller.resume(cli.session);
@@ -191,8 +207,11 @@ async function runTui(cli: Cli): Promise<void> {
       cwd: cli.cwd,
       settings,
       model: choice,
+      cachedModels: readCachedModels(),
+      cacheModels: writeCachedModels,
       agent: cli.agent,
       opencode: { client: server.client, clientV2: server.clientV2 },
+      restartBackend,
     });
     // quit() flushes the unsent input synchronously, so the draft survives an
     // accidentally closed terminal (SIGHUP) as well as Ctrl+C / termination.

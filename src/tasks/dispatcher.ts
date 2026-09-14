@@ -93,7 +93,7 @@ export class TaskDispatcher {
     if (this.ticking) return this.ticking;
     this.ticking = (async () => {
       try {
-        this.reconcile();
+        await this.reconcile();
         await this.integrate();
         this.requestControls();
         this.dispatchReady();
@@ -104,13 +104,28 @@ export class TaskDispatcher {
     return this.ticking;
   }
 
-  /** A `running` task with no live lock was left behind by a crashed process. */
-  private reconcile(): void {
+  /**
+   * A `running` task with no live lock was left behind by a crashed process.
+   * Honour a pending halt/cancel, otherwise auto-requeue so a crash does not
+   * strand work. The existing worktree is reused by the next attempt.
+   */
+  private async reconcile(): Promise<void> {
     for (const task of this.board.read().tasks) {
       if (task.status !== "running") continue;
       if (existsSync(join(this.board.directory, `task-${task.id}.lock`))) continue;
-      this.board.update(task.id, (t) => { t.status = "blocked"; t.detail = "Interrupted before completion. Re-run to retry."; });
-      this.options.onEvent?.(`${task.id}: interrupted; marked blocked`);
+      const requested = task.requestedAction;
+      if (!requested) {
+        // A crashed run is requeued; drop its half-finished worktree so the next
+        // attempt starts clean instead of leaking it.
+        try { await cleanupTask(this.board, task.id, true); } catch { /* best effort */ }
+      }
+      this.board.update(task.id, (t) => {
+        t.requestedAction = undefined;
+        if (requested === "cancel") { t.status = "cancelled"; t.progress = undefined; t.detail = "Cancelled"; }
+        else if (requested === "pause") { t.status = "blocked"; t.detail = "Halted"; }
+        else { t.status = "new"; t.merge = "not-merged"; t.detail = "Requeued after an interrupted run"; }
+      });
+      this.options.onEvent?.(`${task.id}: interrupted; ${requested === "cancel" ? "cancelled" : requested === "pause" ? "blocked" : "requeued"}`);
     }
   }
 
@@ -183,30 +198,19 @@ export class TaskDispatcher {
       : Math.max(1, this.options.concurrency);
     const snapshot = this.board.read();
     const merged = (id: string): boolean => snapshot.tasks.find((t) => t.id === id)?.merge === "merged";
-    const laneOf = (task: Task): string => task.group || `#${task.id}`;
-    // Lanes are the unit of parallelism: one active task per group, distinct
-    // groups run together. An ungrouped task is its own lane.
-    const activeLanes = new Set<string>();
-    for (const id of this.active.keys()) {
-      const active = snapshot.tasks.find((t) => t.id === id);
-      if (active) activeLanes.add(laneOf(active));
-    }
+    const running = snapshot.tasks.filter((t) => this.active.has(t.id));
+    // Scope-aware parallelism: any number of ready tasks run at once, except
+    // that a task is deferred while an active (or already-chosen) task's scope
+    // overlaps it. Overlapping work would only merge-conflict, so serialising it
+    // protects throughput; disjoint work runs freely.
+    const chosenScopes: Array<{ id: string; scope: string[] }> = running.map((t) => ({ id: t.id, scope: t.scope ?? [] }));
     for (const task of snapshot.tasks) {
       if (this.active.size >= limit) break;
       if (task.status !== "new" || this.active.has(task.id)) continue;
       if (!this.ready(task, merged)) continue;
-      const lane = laneOf(task);
-      if (activeLanes.has(lane)) continue;
-      // Cross-lane file overlap is a warning only; lane assignment is the
-      // orchestrator's job and the merge remains the final guard.
-      for (const id of this.active.keys()) {
-        const other = snapshot.tasks.find((t) => t.id === id);
-        if (other && scopesOverlap(task.scope ?? [], other.scope ?? [])) {
-          this.options.onEvent?.(`${task.id}: scope overlaps active ${id}; lanes may conflict`);
-          break;
-        }
-      }
-      activeLanes.add(lane);
+      const blocker = chosenScopes.find((other) => scopesOverlap(task.scope ?? [], other.scope));
+      if (blocker) continue;
+      chosenScopes.push({ id: task.id, scope: task.scope ?? [] });
       this.options.onEvent?.(`${task.id}: started`);
       const controller = new AbortController();
       this.controllers.set(task.id, controller);

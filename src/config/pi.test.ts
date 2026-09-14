@@ -61,6 +61,43 @@ test("midasOpencodeConfig merges midas dirs into mcp, skills and instructions", 
   });
 });
 
+test("midasOpencodeConfig drops disabled skills by passing individual folders", () => {
+  withSandbox((_root, cwd) => {
+    const midas = process.env.MIDAS_CONFIG_DIR!;
+    for (const name of ["alpha", "beta"]) {
+      const dir = join(midas, "skills", name);
+      mkdirSync(dir, { recursive: true });
+      write(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: test\n---\n# ${name}\n`);
+    }
+
+    const config = midasOpencodeConfig(cwd, { disabledSkills: new Set(["beta"]) }) as { skills: string[] };
+    assert.deepEqual(config.skills, [join(midas, "skills", "alpha")], "only the enabled skill folder is passed");
+
+    const none = midasOpencodeConfig(cwd, { disabledSkills: new Set(["alpha", "beta"]) }) as { skills?: string[] };
+    assert.equal(none.skills, undefined, "disabling everything passes no skill paths");
+  });
+});
+
+test("midasOpencodeConfig installs midas-owned agents", () => {
+  withSandbox((_root, cwd) => {
+    const config = midasOpencodeConfig(cwd) as {
+      agent: Record<string, { prompt?: string; permission?: Record<string, unknown> }>;
+    };
+    for (const name of ["main", "advisor", "explore", "orchestrator", "task", "merge"]) {
+      assert.ok(config.agent[name]?.prompt, `${name} prompt missing`);
+    }
+    // main is lean: no task-board or multitask references at all.
+    assert.doesNotMatch(config.agent.main!.prompt!, /task board|multitask|orchestrator|dispatcher/i);
+    // advisor/explore are scoped and mention no board pipeline.
+    for (const name of ["advisor", "explore"]) {
+      assert.doesNotMatch(config.agent[name]!.prompt!, /task board|multitask|orchestrator|dispatcher/i);
+    }
+    // The orchestrator may ask the user; the task agent may not.
+    assert.equal(config.agent.orchestrator!.permission?.question, "allow");
+    assert.equal(config.agent.task!.permission?.question, "deny");
+  });
+});
+
 test("midasOpencodeConfig applies MIDAS_CONFIG_FILE last", () => {
   withSandbox((root, cwd) => {
     const override = join(root, "override.jsonc");

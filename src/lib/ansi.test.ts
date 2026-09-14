@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CONTENT_END, CONTENT_START, DECORATION, markRenderedLines } from "./ansi.ts";
+import { CONTENT_END, CONTENT_START, DECORATION, markRenderedLines, stripBold } from "./ansi.ts";
 
 test("markRenderedLines bounds visible content and leaves padding outside", () => {
   assert.deepEqual(markRenderedLines(["  hello world   "]), [`  ${CONTENT_START}hello world${CONTENT_END}   `]);
@@ -22,4 +22,9 @@ test("markRenderedLines preserves existing bounds and decoration", () => {
   assert.deepEqual(markRenderedLines([marked]), [marked]);
   const decoration = `${DECORATION}╭─╮`;
   assert.deepEqual(markRenderedLines([decoration]), [decoration]);
+});
+
+test("stripBold drops bold without disturbing the surrounding colour", () => {
+  assert.equal(stripBold("\x1b[38;2;1;2;3m\x1b[1m$ ls\x1b[22m\x1b[39m"), "\x1b[38;2;1;2;3m$ ls\x1b[22m\x1b[39m");
+  assert.equal(stripBold("plain"), "plain");
 });

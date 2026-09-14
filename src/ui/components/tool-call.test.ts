@@ -5,7 +5,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../../lib/ansi.ts";
 import { initTheme } from "../../theme/theme.ts";
 import type { ToolView } from "../../state/transcript.ts";
-import { formatMcpDisplayName, renderTool, setMcpServerNames, toolLiveText } from "./tool-call.ts";
+import { formatMcpDisplayName, renderSubagentTool, renderTool, setMcpServerNames, toolLiveText } from "./tool-call.ts";
 
 initPiTheme(undefined, false);
 initTheme(undefined);
@@ -84,6 +84,53 @@ test("question tools read as asking, not the generic running label", () => {
   assert.equal(toolLiveText(asking, "/cwd"), "Asking question");
   const asked = edit({ status: "completed", tool: "question", input: { questions: [] } });
   assert.equal(stripAnsi(renderTool(asked, 80, false, "/cwd")[0]!), "✓ Asked question");
+});
+
+test("skill tools name the skill instead of using the generic tool label", () => {
+  const using = edit({ status: "running", tool: "skill", input: { name: "control" } });
+  assert.equal(toolLiveText(using, "/cwd"), "Using Control skill");
+  const used = edit({ tool: "skill", input: { name: "control" }, output: "Loaded skill: control" });
+  assert.equal(stripAnsi(renderTool(used, 80, false, "/cwd")[0]!), "✓ Used Control skill");
+});
+
+test("OpenCode task tools use the Pi-style subagent presentation", () => {
+  const task = edit({
+    status: "running",
+    tool: "task",
+    input: {
+      subagent_type: "explore",
+      description: "Inspect Lightning feature gaps",
+      prompt: "Inspect the repository and report any missing features.",
+    },
+  });
+  assert.equal(toolLiveText(task, "/cwd"), "Running Subagents (1 task)");
+  assert.deepEqual(renderSubagentTool(task, 80, false, "⠋").map(stripAnsi), [
+    "⠋ Running Subagents (1 task):",
+    "⠋ Explore: Inspect Lightning feature gaps",
+  ]);
+
+  const completed = { ...task, status: "completed" as const };
+  assert.deepEqual(renderSubagentTool(completed, 80, false).map(stripAnsi), [
+    "✓ Subagents (1 task):",
+    "✓ Explore: Inspect Lightning feature gaps",
+  ]);
+});
+
+test("expanded subagent tools show the delegated prompt and unwrapped result", () => {
+  const task = edit({
+    tool: "task",
+    input: { subagent_type: "code-reviewer", description: "Review changes", prompt: "Review the current diff." },
+    output: "<task id=\"child\"><task_result>Looks good.</task_result></task>",
+  });
+  assert.deepEqual(renderTool(task, 80, true, "/cwd").map(stripAnsi), [
+    "✓ Code Reviewer",
+    "",
+    "─── Task ───",
+    "Review the current diff.",
+    "",
+    "─── Output ───",
+    "Looks good.",
+  ]);
 });
 
 test("formatMcpDisplayName title-cases server and tool names", () => {

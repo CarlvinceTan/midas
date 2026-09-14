@@ -13,6 +13,11 @@ export const TOAST_STYLES: Record<ToastLevel, string> = {
   error: "\x1b[41m\x1b[97m",
 };
 
+/** Fit the overlay to its message with one column of padding on each side. */
+export function toastWidth(text: string, maxWidth: number): number {
+  return Math.min(visibleWidth(text) + 2, Math.max(1, maxWidth));
+}
+
 /** One-line transient message, rendered as a top-right overlay. */
 export class Toast implements Component {
   constructor(

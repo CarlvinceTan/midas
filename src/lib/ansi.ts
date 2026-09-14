@@ -38,6 +38,11 @@ export function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+/** Remove bold SGR so already-styled text renders at normal weight. */
+export function stripBold(text: string): string {
+  return text.replace(/\x1b\[1m/g, "");
+}
+
 /**
  * Truncate styled text to `maxWidth` visible columns, appending an ellipsis in
  * the same colour as the text it replaces (pi-tui's truncation resets the colour

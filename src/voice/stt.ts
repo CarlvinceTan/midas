@@ -167,7 +167,12 @@ export class VoiceController {
     } else if (event.type === "partial") {
       this.markReady();
       if (!this.listening) return;
-      this.partial = event.text ?? "";
+      const text = event.text ?? "";
+      // A silent or noisy gap can make the engine report an empty partial (the
+      // streaming model drops its un-finalized tail). Ignore it so words already
+      // recognised are not wiped from the input; only real speech replaces them.
+      if (!text && this.partial) return;
+      this.partial = text;
       this.options.onText(this.committed, this.partial);
     } else if (event.type === "final") {
       this.markReady();

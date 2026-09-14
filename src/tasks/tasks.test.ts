@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 import { eventSessionId } from "../opencode/session.ts";
 import { findImagePaths, readImageAttachment } from "../lib/attachments.ts";
 import { RoundedDialogFrame, PanelOverlay } from "../ui/rounded-frame.ts";
-import { Toast, TOAST_STYLES, type ToastLevel } from "../ui/components/toast.ts";
+import { Toast, TOAST_STYLES, toastWidth, type ToastLevel } from "../ui/components/toast.ts";
 import { TasksView, taskIcon } from "../ui/components/tasks-view.ts";
 import { QueuedMessages } from "../ui/components/queued-messages.ts";
 
@@ -266,10 +266,10 @@ test("dispatcher autonomously runs, merges, cleans up and unblocks dependents", 
 
 test("dispatcher respects concurrency and waits for dependency merges", async (t) => {
   const { board } = fixture(t);
-  const make = (group: string) => ({ title: "Parallel work", group, instructions: "Write a unique file", checks: ["true"] });
-  const a = board.add(make("A"));
-  const b = board.add(make("B"));
-  const dependent = board.add({ ...make("A"), dependencies: [a.id] });
+  const make = (scope: string) => ({ title: "Parallel work", instructions: "Write a unique file", checks: ["true"], scope: [scope] });
+  const a = board.add(make("a/"));
+  const b = board.add(make("b/"));
+  const dependent = board.add({ ...make("a/"), dependencies: [a.id] });
   let live = 0;
   let peak = 0;
   const dispatcher = new TaskDispatcher(board, {
@@ -346,7 +346,7 @@ test("editing a running task notifies its worker once with the new contract", as
   assert.match(notices[0]!, /new brief/);
 });
 
-test("pause aborts a running worker and can be resumed", async (t) => {
+test("halt aborts a running worker and can be resumed", async (t) => {
   const { board } = fixture(t);
   const task = board.add(contract);
   let startedResolve!: () => void;
@@ -367,7 +367,7 @@ test("pause aborts a running worker and can be resumed", async (t) => {
   await dispatcher.tick();
   await dispatcher.drain();
   dispatcher.stop();
-  assert.equal(board.get(task.id).status, "paused");
+  assert.equal(board.get(task.id).status, "blocked");
   assert.equal(board.get(task.id).requestedAction, undefined);
   board.resume(task.id);
   assert.equal(board.get(task.id).status, "new");
@@ -399,17 +399,22 @@ test("cancel aborts a running worker and marks it cancelled", async (t) => {
   assert.equal(board.get(task.id).requestedAction, undefined);
 });
 
-test("pause/resume/cancel validate task state", (t) => {
+test("halt/clarify/resume/cancel validate task state", (t) => {
   const { board } = fixture(t);
   const task = board.add(contract);
   board.pause(task.id);
-  assert.equal(board.get(task.id).status, "paused");
+  assert.equal(board.get(task.id).status, "blocked");
+  board.resume(task.id);
+  assert.equal(board.get(task.id).status, "new");
+  board.clarify(task.id, "which branch?");
+  assert.equal(board.get(task.id).status, "clarify");
+  assert.equal(board.get(task.id).detail, "which branch?");
   board.resume(task.id);
   assert.equal(board.get(task.id).status, "new");
   board.cancel(task.id);
   assert.equal(board.get(task.id).status, "cancelled");
-  assert.throws(() => board.pause(task.id), /cannot be paused/);
-  assert.throws(() => board.resume(task.id), /not paused or blocked/);
+  assert.throws(() => board.pause(task.id), /cannot be halted/);
+  assert.throws(() => board.resume(task.id), /not blocked or awaiting clarification/);
   board.update(task.id, (t) => { t.merge = "merged"; });
   assert.throws(() => board.cancel(task.id), /already merged/);
 });
@@ -440,23 +445,23 @@ test("dispatcher runs one task per lane and different lanes in parallel", async 
   assert.ok(peak >= 2, "different lanes ran together");
 });
 
-test("cross-lane scope overlap warns but does not block", async (t) => {
+test("scope-aware scheduling serialises overlapping scopes and runs disjoint ones together", async (t) => {
   const { board } = fixture(t);
-  const events: string[] = [];
-  board.add({ title: "a", group: "alpha", instructions: "x", checks: ["true"], scope: ["src/"] });
-  board.add({ title: "b", group: "beta", instructions: "x", checks: ["true"], scope: ["src/a.ts"] });
+  board.add({ title: "a", instructions: "x", checks: ["true"], scope: ["src/"] });
+  board.add({ title: "b", instructions: "x", checks: ["true"], scope: ["src/a.ts"] });
+  board.add({ title: "c", instructions: "x", checks: ["true"], scope: ["docs/"] });
   const worker = async (): Promise<void> => { await new Promise((resolve) => setTimeout(resolve, 50)); };
-  const dispatcher = new TaskDispatcher(board, { lease: false, concurrency: 3, worker, onEvent: (message) => events.push(message) });
+  const dispatcher = new TaskDispatcher(board, { lease: false, concurrency: 3, worker });
   await dispatcher.tick();
-  assert.equal(dispatcher.running, 2);
-  assert.ok(events.some((event) => /scope overlaps/.test(event)));
+  // a and b overlap, so only one of them plus c runs.
+  assert.equal(dispatcher.running, 2, "overlapping scopes must not run together");
   await dispatcher.drain();
   dispatcher.stop();
 });
 
-test("dispatcher defaults to unlimited concurrency so every ready lane starts", async (t) => {
+test("dispatcher defaults to unlimited concurrency so every ready task with disjoint scope starts", async (t) => {
   const { board } = fixture(t);
-  for (let i = 0; i < 10; i++) board.add({ title: `Task ${i}`, instructions: "x", checks: ["true"] });
+  for (let i = 0; i < 10; i++) board.add({ title: `Task ${i}`, instructions: "x", checks: ["true"], scope: [`t${i}/`] });
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const dispatcher = new TaskDispatcher(board, {
@@ -464,7 +469,7 @@ test("dispatcher defaults to unlimited concurrency so every ready lane starts", 
     worker: async () => { await gate; },
   });
   await dispatcher.tick();
-  assert.equal(dispatcher.running, 10, "without an explicit cap every ready lane dispatches");
+  assert.equal(dispatcher.running, 10, "without an explicit cap every disjoint ready task dispatches");
   release();
   await dispatcher.drain();
   dispatcher.stop();
@@ -472,7 +477,7 @@ test("dispatcher defaults to unlimited concurrency so every ready lane starts", 
 
 test("dispatcher still honors an explicit concurrency cap", async (t) => {
   const { board } = fixture(t);
-  for (let i = 0; i < 10; i++) board.add({ title: `Task ${i}`, instructions: "x", checks: ["true"] });
+  for (let i = 0; i < 10; i++) board.add({ title: `Task ${i}`, instructions: "x", checks: ["true"], scope: [`t${i}/`] });
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const dispatcher = new TaskDispatcher(board, {
@@ -487,15 +492,33 @@ test("dispatcher still honors an explicit concurrency cap", async (t) => {
   dispatcher.stop();
 });
 
-test("dispatcher marks interrupted runs blocked instead of double-running", async (t) => {
+test("dispatcher requeues an interrupted run instead of stranding it", async (t) => {
   const { cwd, board } = fixture(t);
   const task = board.add(contract);
   board.update(task.id, (t) => { t.status = "running"; t.attempts.push({ id: "ghost", worktree: cwd, branch: "ghost", base: "HEAD" }); });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const dispatcher = new TaskDispatcher(board, { lease: false, worker: async () => { await gate; } });
+  await dispatcher.tick();
+  // Reconcile put it back to new and the dispatcher immediately re-dispatched it.
+  assert.equal(dispatcher.running, 1, "interrupted task was not requeued and re-dispatched");
+  assert.notEqual(board.get(task.id).status, "blocked", "interrupted task was stranded as blocked");
+  release();
+  await dispatcher.drain();
+  dispatcher.stop();
+});
+
+test("dispatcher honours a halt/cancel requested before a crash", async (t) => {
+  const { cwd, board } = fixture(t);
+  const halted = board.add(contract);
+  const cancelled = board.add({ ...contract, title: "Cancelled" });
+  board.update(halted.id, (t) => { t.status = "running"; t.requestedAction = "pause"; t.attempts.push({ id: "g1", worktree: cwd, branch: "g1", base: "HEAD" }); });
+  board.update(cancelled.id, (t) => { t.status = "running"; t.requestedAction = "cancel"; t.attempts.push({ id: "g2", worktree: cwd, branch: "g2", base: "HEAD" }); });
   const dispatcher = new TaskDispatcher(board, { lease: false });
   await dispatcher.tick();
   dispatcher.stop();
-  assert.equal(board.get(task.id).status, "blocked");
-  assert.match(board.get(task.id).detail ?? "", /Interrupted/);
+  assert.equal(board.get(halted.id).status, "blocked");
+  assert.equal(board.get(cancelled.id).status, "cancelled");
 });
 
 test("dispatcher lease elects one leader and recovers a stale one", (t) => {
@@ -694,6 +717,13 @@ test("toast renders one styled line at the requested width", () => {
   assert.equal(stripTerminalSequences(lines[0]!).length, 20);
 });
 
+test("toast width leaves exactly one space on each side of its message", () => {
+  const text = "Reloaded!";
+  const width = toastWidth(text, 80);
+  const line = new Toast(text, "success").render(width)[0]!;
+  assert.equal(stripTerminalSequences(line), ` ${text} `);
+});
+
 test("each toast level renders its own fixed background and foreground", () => {
   const cases: Array<{ level: ToastLevel; style: string }> = [
     { level: "success", style: "\x1b[42m\x1b[30m" },
@@ -778,21 +808,18 @@ test("panel overlay insets content from the side borders", () => {
   for (const line of lines) assert.equal(line.length, 20);
 });
 
-test("tasks view uses inline icons, independent merge badges and worktree grouping", (t) => {
+test("tasks view renders flat rows with derived state icons", (t) => {
   const { board } = fixture(t);
   const task = board.add(contract);
   const view = new TasksView(() => {});
   view.tasks = [task];
   assert.equal(taskIcon(task, 0), "○");
-  assert.match(view.render(160).join("\n"), /Feature/);
   task.status = "running";
   assert.notEqual(taskIcon(task, 0), taskIcon(task, 1));
   task.status = "completed";
-  assert.match(view.render(160).join("\n"), /✓.*not merged/);
+  assert.match(view.render(160).join("\n"), /●.*not merged/);
   task.merge = "merged";
-  assert.match(view.render(160).join("\n"), /✓.*⤵ merged/);
-  view.handleInput("\t");
-  assert.match(view.render(160).join("\n"), /Not allocated/);
+  assert.match(view.render(160).join("\n"), /✓.*merged → /);
 });
 
 test("tasks view empty state is mode-aware and never prints a shell command", () => {

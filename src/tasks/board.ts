@@ -26,7 +26,7 @@ export interface Attempt {
 }
 export interface Task extends Contract {
   id: string;
-  status: "new" | "running" | "completed" | "blocked" | "paused" | "cancelled";
+  status: "new" | "running" | "completed" | "blocked" | "clarify" | "cancelled";
   merge: "not-merged" | "integrating" | "merged" | "failed";
   target: string;
   attempts: Attempt[];
@@ -35,6 +35,10 @@ export interface Task extends Contract {
   /** Set on a running task to ask the dispatcher to pause/cancel its worker. */
   requestedAction?: "pause" | "cancel";
   detail?: string;
+  /** Model-generated stage phrase (the lightweight status agent). */
+  progress?: string;
+  /** Contract revision the model title was generated from; keeps titles stable. */
+  titledRevision?: number;
   mergedCommit?: string;
   /** Machine-readable reason the last merge attempt was deferred (e.g. wrong branch, overlapping edits). */
   mergeBlocked?: string;
@@ -289,28 +293,49 @@ export class TaskBoard {
       if (patch.dependencies !== undefined) task.dependencies = [...patch.dependencies];
       task.revision = (task.revision ?? 0) + 1;
       task.detail = "updated";
-      // A finished-but-unmerged or blocked task must re-run the edited contract.
-      if (task.status === "blocked" || task.status === "completed") { task.status = "new"; task.merge = "not-merged"; }
+      // A finished-but-unmerged, blocked, or clarify task must re-run the edited contract.
+      if (task.status === "blocked" || task.status === "clarify" || task.status === "completed") {
+        task.status = "new";
+        task.merge = "not-merged";
+      }
       return task;
     });
   }
-  /** Ask a running task to pause; an idle pending task pauses immediately. */
+  /**
+   * Halt a task: a running worker is asked to stop, an idle task blocks
+   * immediately. Blocked is the halt state; there is no separate `paused`.
+   */
   pause(id: string): Task {
     return this.mutate((board) => {
       const task = board.tasks.find((task) => task.id === id);
       if (!task) throw new Error(`Unknown task: ${id}`);
-      if (task.status === "cancelled" || task.status === "completed" || task.merge === "merged") throw new Error(`Task ${id} cannot be paused`);
-      if (task.status === "running") { task.requestedAction = "pause"; task.detail = "Pause requested"; }
-      else { task.status = "paused"; task.detail = "Paused"; }
+      if (task.status === "cancelled" || task.status === "completed" || task.merge === "merged") throw new Error(`Task ${id} cannot be halted`);
+      if (task.status === "running") { task.requestedAction = "pause"; task.detail = "Halt requested"; }
+      else { task.status = "blocked"; task.detail = "Halted"; }
       return task;
     });
   }
-  /** Re-queue a paused or blocked task so the (possibly edited) contract runs. */
+  /**
+   * Flag a task as needing a user decision (`?`). The dispatcher never runs a
+   * clarify task; the orchestrator asks the user, then edits/resumes it.
+   */
+  clarify(id: string, detail = "Needs clarification"): Task {
+    return this.mutate((board) => {
+      const task = board.tasks.find((task) => task.id === id);
+      if (!task) throw new Error(`Unknown task: ${id}`);
+      if (task.merge === "merged" || task.status === "cancelled") throw new Error(`Task ${id} cannot be clarified`);
+      if (task.status === "running") throw new Error(`Task ${id} is running; halt it before marking it for clarification`);
+      task.status = "clarify";
+      task.detail = detail;
+      return task;
+    });
+  }
+  /** Re-queue a blocked or clarify task so the (possibly edited) contract runs. */
   resume(id: string): Task {
     return this.mutate((board) => {
       const task = board.tasks.find((task) => task.id === id);
       if (!task) throw new Error(`Unknown task: ${id}`);
-      if (task.status !== "paused" && task.status !== "blocked") throw new Error(`Task ${id} is not paused or blocked`);
+      if (task.status !== "blocked" && task.status !== "clarify") throw new Error(`Task ${id} is not blocked or awaiting clarification`);
       task.requestedAction = undefined;
       task.status = "new";
       task.merge = "not-merged";
@@ -326,7 +351,7 @@ export class TaskBoard {
       if (!task) throw new Error(`Unknown task: ${id}`);
       if (task.merge === "merged") throw new Error(`Task ${id} is already merged`);
       if (task.status === "running") { task.requestedAction = "cancel"; task.detail = "Cancel requested"; }
-      else { task.status = "cancelled"; task.detail = "Cancelled"; }
+      else { task.status = "cancelled"; task.detail = "Cancelled"; task.progress = undefined; }
       return task;
     });
   }

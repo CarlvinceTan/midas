@@ -497,13 +497,18 @@ export class Editor {
         // autocomplete (e.g. slash-command menu) is visible.
         const emitCursorMarker = this.focused;
         for (const layoutLine of visibleLines) {
-            let displayText = layoutLine.text;
-            let lineVisibleWidth = visibleWidth(layoutLine.text);
+            const indent = layoutLine.indent || 0;
+            const indentText = " ".repeat(indent);
+            // `cursorPos` is relative to the line text, so shift it past the
+            // hanging indent used by shell-mode continuation lines.
+            const cursorPos = (layoutLine.cursorPos ?? 0) + indent;
+            let displayText = indentText + layoutLine.text;
+            let lineVisibleWidth = visibleWidth(displayText);
             let cursorInPadding = false;
             // Add cursor if this line has it
             if (this.cursorVisible !== false && layoutLine.hasCursor && layoutLine.cursorPos !== undefined) {
-                const before = displayText.slice(0, layoutLine.cursorPos);
-                const after = displayText.slice(layoutLine.cursorPos);
+                const before = displayText.slice(0, cursorPos);
+                const after = displayText.slice(cursorPos);
                 // Hardware cursor marker (zero-width, emitted before fake cursor for IME positioning)
                 const marker = emitCursorMarker ? CURSOR_MARKER : "";
                 if (after.length > 0) {
@@ -876,6 +881,55 @@ export class Editor {
             this.insertCharacter(data);
         }
     }
+    /**
+     * Hanging indent (columns) for shell-mode continuation lines. When the input
+     * starts with a `!`/`!!` command prefix, later visual lines hang under the
+     * command text instead of under the bang; `0` means ordinary wrapping.
+     */
+    hangingIndent() {
+        const first = this.state.lines[0] || "";
+        const match = /^(!{1,2}) /.exec(first);
+        return match ? match[1].length + 1 : 0;
+    }
+    /**
+     * Split one logical line into visual chunks, flagging shell-mode
+     * continuation chunks with the hanging indent so rendering and the visual
+     * line map stay in sync (and cursor navigation keeps working).
+     */
+    visualChunks(lineIndex, width) {
+        const line = this.state.lines[lineIndex] || "";
+        const indent = this.hangingIndent();
+        if (line.length === 0) {
+            // A continuation line still reserves the indent so the cursor rests
+            // at the command column.
+            return [{ text: "", startIndex: 0, endIndex: 0, indent: lineIndex > 0 ? indent : 0 }];
+        }
+        if (indent === 0) {
+            if (visibleWidth(line) <= width) {
+                return [{ text: line, startIndex: 0, endIndex: line.length, indent: 0 }];
+            }
+            return wordWrapLine(line, width, [...this.segment(line, "grapheme")]).map((chunk) => ({ ...chunk, indent: 0 }));
+        }
+        const restWidth = Math.max(1, width - indent);
+        if (lineIndex > 0) {
+            return wordWrapLine(line, restWidth, [...this.segment(line, "grapheme")]).map((chunk) => ({ ...chunk, indent }));
+        }
+        // First logical line: the opening chunk may use the full width, the
+        // wrapped remainder hangs under the command text.
+        const head = wordWrapLine(line, width, [...this.segment(line, "grapheme")]);
+        if (head.length <= 1) {
+            return head.map((chunk) => ({ ...chunk, indent: 0 }));
+        }
+        const chunks = [{ ...head[0], indent: 0 }];
+        const offset = head[0].endIndex;
+        const remainder = line.slice(offset);
+        if (remainder.length > 0) {
+            for (const chunk of wordWrapLine(remainder, restWidth, [...this.segment(remainder, "grapheme")])) {
+                chunks.push({ text: chunk.text, startIndex: offset + chunk.startIndex, endIndex: offset + chunk.endIndex, indent });
+            }
+        }
+        return chunks;
+    }
     layoutText(contentWidth) {
         const layoutLines = [];
         if (this.state.lines.length === 0 || (this.state.lines.length === 1 && this.state.lines[0] === "")) {
@@ -884,76 +938,59 @@ export class Editor {
                 text: "",
                 hasCursor: true,
                 cursorPos: 0,
+                indent: 0,
             });
             return layoutLines;
         }
         // Process each logical line
         for (let i = 0; i < this.state.lines.length; i++) {
-            const line = this.state.lines[i] || "";
+            const chunks = this.visualChunks(i, contentWidth);
             const isCurrentLine = i === this.state.cursorLine;
-            const lineVisibleWidth = visibleWidth(line);
-            if (lineVisibleWidth <= contentWidth) {
-                // Line fits in one layout line
+            for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+                const chunk = chunks[chunkIndex];
+                if (!chunk)
+                    continue;
+                const cursorPos = this.state.cursorCol;
+                const isLastChunk = chunkIndex === chunks.length - 1;
+                const indent = chunk.indent || 0;
+                // Determine if cursor is in this chunk
+                // For word-wrapped chunks, we need to handle the case where
+                // cursor might be in trimmed whitespace at end of chunk
+                let hasCursorInChunk = false;
+                let adjustedCursorPos = 0;
                 if (isCurrentLine) {
+                    if (isLastChunk) {
+                        // Last chunk: cursor belongs here if >= startIndex
+                        hasCursorInChunk = cursorPos >= chunk.startIndex;
+                        adjustedCursorPos = cursorPos - chunk.startIndex;
+                    }
+                    else {
+                        // Non-last chunk: cursor belongs here if in range [startIndex, endIndex)
+                        // But we need to handle the visual position in the trimmed text
+                        hasCursorInChunk = cursorPos >= chunk.startIndex && cursorPos < chunk.endIndex;
+                        if (hasCursorInChunk) {
+                            adjustedCursorPos = cursorPos - chunk.startIndex;
+                            // Clamp to text length (in case cursor was in trimmed whitespace)
+                            if (adjustedCursorPos > chunk.text.length) {
+                                adjustedCursorPos = chunk.text.length;
+                            }
+                        }
+                    }
+                }
+                if (hasCursorInChunk) {
                     layoutLines.push({
-                        text: line,
+                        text: chunk.text,
                         hasCursor: true,
-                        cursorPos: this.state.cursorCol,
+                        cursorPos: adjustedCursorPos,
+                        indent,
                     });
                 }
                 else {
                     layoutLines.push({
-                        text: line,
+                        text: chunk.text,
                         hasCursor: false,
+                        indent,
                     });
-                }
-            }
-            else {
-                // Line needs wrapping - use word-aware wrapping
-                const chunks = wordWrapLine(line, contentWidth, [...this.segment(line, "grapheme")]);
-                for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-                    const chunk = chunks[chunkIndex];
-                    if (!chunk)
-                        continue;
-                    const cursorPos = this.state.cursorCol;
-                    const isLastChunk = chunkIndex === chunks.length - 1;
-                    // Determine if cursor is in this chunk
-                    // For word-wrapped chunks, we need to handle the case where
-                    // cursor might be in trimmed whitespace at end of chunk
-                    let hasCursorInChunk = false;
-                    let adjustedCursorPos = 0;
-                    if (isCurrentLine) {
-                        if (isLastChunk) {
-                            // Last chunk: cursor belongs here if >= startIndex
-                            hasCursorInChunk = cursorPos >= chunk.startIndex;
-                            adjustedCursorPos = cursorPos - chunk.startIndex;
-                        }
-                        else {
-                            // Non-last chunk: cursor belongs here if in range [startIndex, endIndex)
-                            // But we need to handle the visual position in the trimmed text
-                            hasCursorInChunk = cursorPos >= chunk.startIndex && cursorPos < chunk.endIndex;
-                            if (hasCursorInChunk) {
-                                adjustedCursorPos = cursorPos - chunk.startIndex;
-                                // Clamp to text length (in case cursor was in trimmed whitespace)
-                                if (adjustedCursorPos > chunk.text.length) {
-                                    adjustedCursorPos = chunk.text.length;
-                                }
-                            }
-                        }
-                    }
-                    if (hasCursorInChunk) {
-                        layoutLines.push({
-                            text: chunk.text,
-                            hasCursor: true,
-                            cursorPos: adjustedCursorPos,
-                        });
-                    }
-                    else {
-                        layoutLines.push({
-                            text: chunk.text,
-                            hasCursor: false,
-                        });
-                    }
                 }
             }
         }
@@ -1686,25 +1723,12 @@ export class Editor {
     buildVisualLineMap(width) {
         const visualLines = [];
         for (let i = 0; i < this.state.lines.length; i++) {
-            const line = this.state.lines[i] || "";
-            const lineVisWidth = visibleWidth(line);
-            if (line.length === 0) {
-                // Empty line still takes one visual line
-                visualLines.push({ logicalLine: i, startCol: 0, length: 0 });
-            }
-            else if (lineVisWidth <= width) {
-                visualLines.push({ logicalLine: i, startCol: 0, length: line.length });
-            }
-            else {
-                // Line needs wrapping - use word-aware wrapping
-                const chunks = wordWrapLine(line, width, [...this.segment(line, "grapheme")]);
-                for (const chunk of chunks) {
-                    visualLines.push({
-                        logicalLine: i,
-                        startCol: chunk.startIndex,
-                        length: chunk.endIndex - chunk.startIndex,
-                    });
-                }
+            for (const chunk of this.visualChunks(i, width)) {
+                visualLines.push({
+                    logicalLine: i,
+                    startCol: chunk.startIndex,
+                    length: chunk.endIndex - chunk.startIndex,
+                });
             }
         }
         return visualLines;

@@ -35,6 +35,7 @@ export async function taskCli(args: string[]): Promise<void> {
   if (!command || command === "--help") {
     process.stdout.write(
       "midas task [--cwd DIR] add CONTRACT.json | update ID CONTRACT.json | remove ID | list | run ID | merge ID | cleanup [ID]\n" +
+        "midas task [--cwd DIR] block ID | clarify ID [DETAIL]   halt a task / flag it as needing the user\n" +
         "midas task [--cwd DIR] dispatch [--once] [--concurrency N]   run the board autonomously\n",
     );
     return;
@@ -82,8 +83,12 @@ export async function taskCli(args: string[]): Promise<void> {
     return;
   }
   const arity = command === "list" || command === "cleanup" ? 1 : command === "update" ? 3 : 2;
-  if (!["add", "update", "remove", "list", "run", "merge", "cleanup"].includes(command)
-    || (command === "cleanup" ? args.length < 1 || args.length > 2 : args.length !== arity)) {
+  if (!["add", "update", "remove", "list", "run", "merge", "cleanup", "block", "clarify"].includes(command)
+    || (command === "cleanup"
+      ? args.length < 1 || args.length > 2
+      : command === "clarify"
+        ? args.length < 2 || args.length > 3
+        : args.length !== arity)) {
     throw new Error("Invalid task command; use midas task --help");
   }
   if (command === "add") {
@@ -100,6 +105,14 @@ export async function taskCli(args: string[]): Promise<void> {
     if (!board.hasActiveDispatcher()) throw new Error("No active orchestrator: enable /multitask before removing tasks.");
     const removed = await removeTask(board, value!);
     process.stdout.write(`Removed ${removed.id}\n`);
+  }
+  if (command === "block") {
+    if (!board.hasActiveDispatcher()) throw new Error("No active orchestrator: enable /multitask before halting tasks.");
+    process.stdout.write(JSON.stringify(board.pause(value!), null, 2) + "\n");
+  }
+  if (command === "clarify") {
+    if (!board.hasActiveDispatcher()) throw new Error("No active orchestrator: enable /multitask before clarifying tasks.");
+    process.stdout.write(JSON.stringify(board.clarify(value!, extra), null, 2) + "\n");
   }
   if (command === "list") process.stdout.write(JSON.stringify(board.read(), null, 2) + "\n");
   if (command === "run") await runTask(board, value!, undefined, undefined, { output: stdoutOutput });

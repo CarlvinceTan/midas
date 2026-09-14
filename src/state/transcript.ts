@@ -99,12 +99,16 @@ export interface QuestionView {
  * cause. When the failure looks like a network/DNS problem, name it so the user
  * checks their internet rather than the model or the API key.
  */
+const NETWORK_ERROR_REGEX =
+  /cannot connect to api|unable to connect|fetch failed|enotfound|eai_again|getaddrinfo|network is unreachable|network error|econnrefused|econnreset|etimedout|socket hang up/i;
+
+/** True when an API failure message looks like a network/connection problem. */
+export function isNetworkError(message: string): boolean {
+  return NETWORK_ERROR_REGEX.test(message);
+}
+
 export function formatApiError(message: string): string {
-  if (
-    /cannot connect to api|unable to connect|fetch failed|enotfound|eai_again|getaddrinfo|network is unreachable|network error|econnrefused|econnreset|etimedout|socket hang up/i.test(
-      message,
-    )
-  ) {
+  if (isNetworkError(message)) {
     return "No internet connection: couldn't reach the model API. Check your network and try again.";
   }
   return message;
@@ -155,6 +159,12 @@ function toMessageView(info: Message): MessageView {
 export class Transcript {
   messages: MessageView[] = [];
   phase: SessionPhase = "idle";
+  /**
+   * True while an in-flight turn is blocked on a network failure. Set from
+   * opencode's retry/error events so the live status flips to "Reconnecting"
+   * the moment the drop is seen, without waiting for the next poll.
+   */
+  reconnecting = false;
   session: Session | undefined;
   permissions: Permission[] = [];
   /** Pending question requests from the agent's `question` tool. */
@@ -297,10 +307,20 @@ export class Transcript {
   }
 
   setPhase(phase: SessionPhase): void {
-    if (this.phase !== phase) {
-      this.phase = phase;
-      this.emit();
-    }
+    // Leaving the retry phase means the connection is usable again (or the turn
+    // ended), so the "Reconnecting" flag is cleared with it.
+    const reconnecting = phase === "retry" ? this.reconnecting : false;
+    if (this.phase === phase && this.reconnecting === reconnecting) return;
+    this.phase = phase;
+    this.reconnecting = reconnecting;
+    this.emit();
+  }
+
+  /** Mark (or clear) an in-flight turn as blocked on a network failure. */
+  setReconnecting(value: boolean): void {
+    if (this.reconnecting === value) return;
+    this.reconnecting = value;
+    this.emit();
   }
 
   setSession(session: Session | undefined): void {
@@ -459,6 +479,7 @@ export class Transcript {
     this.permissions = [];
     this.questions = [];
     this.phase = "idle";
+    this.reconnecting = false;
     this.session = session;
     this.emit();
   }

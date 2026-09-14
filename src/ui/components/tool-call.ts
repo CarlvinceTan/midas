@@ -49,6 +49,12 @@ function mcpSplit(toolName: string): { server: string; tool: string } | undefine
   return undefined;
 }
 
+/** Display name of the MCP server that owns a tool, without the tool suffix. */
+export function mcpServerDisplayName(toolName: string): string | undefined {
+  const split = mcpSplit(toolName);
+  return split ? formatMcpDisplayName(split.server) : undefined;
+}
+
 /** "Davinci Resolve MCP: Folder" for an MCP tool id, or undefined if not MCP. */
 function mcpTitle(toolName: string): string | undefined {
   const split = mcpSplit(toolName);
@@ -136,6 +142,59 @@ function preview(value: string, maxLines = EXPANDED_PREVIEW_LINES): string[] {
   const out = lines.slice(0, maxLines).map((line) => theme().fg("dim", line));
   if (lines.length > maxLines) out.push(theme().fg("muted", `... ${lines.length - maxLines} more lines`));
   return out;
+}
+
+function subagentName(tool: ToolView): string {
+  return formatMcpDisplayName(text(tool.input.subagent_type) || "subagent");
+}
+
+function subagentTitle(tool: ToolView): string {
+  const prompt = text(tool.input.prompt);
+  return text(tool.input.description) || tool.title || prompt.split("\n").find((line) => line.trim())?.trim() || "Delegated task";
+}
+
+/** Strip OpenCode's transport wrapper before showing a completed child result. */
+function subagentOutput(tool: ToolView): string {
+  const output = tool.status === "error" ? tool.error ?? tool.output ?? "" : tool.output ?? "";
+  const wrapped = output.match(/^\s*<task(?:\s[^>]*)?>\s*<task_result>\s*([\s\S]*?)\s*<\/task_result>\s*<\/task>\s*$/);
+  return wrapped?.[1] ?? output;
+}
+
+/**
+ * Adapt OpenCode's `task` tool to the compact Pi subagent presentation. A Task
+ * is one child-agent invocation; OpenCode exposes its agent and short title in
+ * the tool input rather than Pi's extension-specific result details.
+ */
+export function renderSubagentTool(
+  tool: ToolView,
+  width: number,
+  expanded: boolean,
+  spinner = currentFrame(),
+): string[] {
+  const t = theme();
+  const active = tool.status === "pending" || tool.status === "running";
+  const failed = tool.status === "error";
+  const glyph = active ? t.fg("accent", spinner) : failed ? t.fg("error", "✗") : t.fg("success", "✓");
+  const title = `${active ? "Running " : ""}Subagents (1 task):`;
+
+  if (!expanded) {
+    const header = truncateToWidth(`${glyph} ${t.fg("toolTitle", title)}`, width);
+    const prefix = `${glyph} ${t.fg("accent", `${subagentName(tool)}:`)} `;
+    const remaining = Math.max(0, width - visibleWidth(prefix));
+    const task = truncateToWidth(subagentTitle(tool), remaining, "...");
+    return [header, truncateToWidth(prefix, width, "") + t.fg("dim", task)];
+  }
+
+  const lines = [truncateToWidth(`${glyph} ${t.fg("toolTitle", subagentName(tool))}`, width)];
+  const prompt = text(tool.input.prompt);
+  if (prompt) {
+    lines.push("", t.fg("muted", "─── Task ───"), ...preview(prompt));
+  }
+  const output = subagentOutput(tool);
+  if (output.trim()) {
+    lines.push("", t.fg("muted", "─── Output ───"), ...preview(output));
+  }
+  return lines;
 }
 
 /** Keep only the hunk body: drop `Index:`, `===`, `---`/`+++`, `@@` and markers. */
@@ -357,6 +416,22 @@ function rowFor(tool: ToolView, cwd: string, width = 120): ToolRow {
         previewText: output,
       };
     }
+    case "skill": {
+      const name = formatMcpDisplayName(text(input.name ?? input.skill ?? input.skill_name) || "skill");
+      return {
+        preparing: `Loading ${name} skill`,
+        running: `Using ${name} skill`,
+        done: `Used ${name} skill`,
+        previewText: output,
+      };
+    }
+    case "task": {
+      return {
+        preparing: "Running Subagents (1 task)",
+        running: "Running Subagents (1 task)",
+        done: "Subagents (1 task)",
+      };
+    }
     default: {
       const summary = text(input.description) || text(input.command) || text(input.query) || tool.title || "";
       const label = tool.tool;
@@ -377,6 +452,7 @@ export function toolLiveText(tool: ToolView, cwd: string, width = 100): string {
 }
 
 export function renderTool(tool: ToolView, width: number, expanded: boolean, cwd: string, now = Date.now()): string[] {
+  if (tool.tool === "task") return renderSubagentTool(tool, width, expanded, currentFrame(now));
   const row = rowFor(tool, cwd, width);
   if (tool.status === "error") return errorRow(row, tool.error ?? tool.output, expanded);
 

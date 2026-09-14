@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { theme } from "../../theme/theme.ts";
 import { markContent, markDecoration } from "../../lib/ansi.ts";
 import { alignSides } from "./footer.ts";
@@ -12,10 +12,6 @@ export interface SessionHeaderInfo {
   branch?: string;
   /** Right-aligned "N skills • M mcps" summary shown on the status row. */
   resources?: string;
-  /** True while the remote link is live; renders a clickable label before resources. */
-  remoteActive?: boolean;
-  /** Invoked when the remote label is clicked (copies the link). */
-  onRemoteClick?: () => void;
   /** Hide the whole pinned header (the terminal-title setting is off). */
   hidden?: boolean;
 }
@@ -25,9 +21,6 @@ export interface SessionHeaderInfo {
  * output), so the session title and live status stay visible.
  */
 export class SessionHeader implements Component {
-  /** Clickable column range of the "remote active" label, in local coordinates. */
-  private remoteRange?: { start: number; end: number };
-
   constructor(
     private getInfo: () => SessionHeaderInfo,
     private getPad: () => number = () => 1,
@@ -35,18 +28,9 @@ export class SessionHeader implements Component {
 
   invalidate(): void {}
 
-  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    const range = this.remoteRange;
-    if (!range || event.type !== "click" || event.button !== "left" || event.y !== 1) return undefined;
-    if (event.x < range.start || event.x >= range.end) return undefined;
-    this.getInfo().onRemoteClick?.();
-    return { handled: true, render: true };
-  }
-
   render(width: number): string[] {
     const t = theme();
     const data = this.getInfo();
-    this.remoteRange = undefined;
     if (data.hidden) return [];
     const pad = this.getPad();
     const inset = " ".repeat(pad);
@@ -57,19 +41,8 @@ export class SessionHeader implements Component {
     // Path and skills/mcps summary sit on the right of the two header rows.
     const location = data.path && data.branch ? `${data.path} (${data.branch})` : data.path;
     const line1 = location ? alignSides(title, t.fg("dim", location), inner, ellipsis) : title;
-    // The remote label sits left of the skills/mcps summary, dot-separated, and
-    // is clickable to copy the public link.
-    const remoteLabel = data.remoteActive ? t.fg("accent", "remote active") : "";
     const resources = data.resources ? t.fg("dim", data.resources) : "";
-    const right = remoteLabel && resources ? `${remoteLabel}${t.fg("dim", " • ")}${resources}` : remoteLabel || resources;
-    const line2 = right ? alignSides(status, right, inner, ellipsis) : status;
-    if (remoteLabel && right) {
-      const rightWidth = visibleWidth(right);
-      if (rightWidth < inner) {
-        const start = pad + inner - rightWidth;
-        this.remoteRange = { start, end: start + visibleWidth(remoteLabel) };
-      }
-    }
+    const line2 = resources ? alignSides(status, resources, inner, ellipsis) : status;
     // A rule under the title/status makes the pinned header read as a header.
     // It is decoration: inset by the row padding and excluded from copy.
     const divider = t.fg("borderMuted", "─".repeat(inner));

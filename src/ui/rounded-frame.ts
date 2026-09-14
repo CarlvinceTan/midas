@@ -17,7 +17,11 @@ import { capitalize } from "../lib/text.ts";
  * and insets content by the configured output padding.
  */
 
-const hasRoundedCorners = (line: string): boolean => line.includes("╭") || line.includes("╰");
+/** A line that is itself a rounded frame edge, e.g. `╭─ Title ───╮`. */
+const isRoundedEdge = (line: string): boolean => {
+  const text = stripTerminalSequences(line).trim();
+  return /^╭─.*╮$/u.test(text) || /^╰─.*╯$/u.test(text);
+};
 
 /** A plain `─` rule, or a scroll rule like `──── ↑ 17 more ────`. */
 function isDialogRulePlain(plain: string): boolean {
@@ -88,7 +92,12 @@ export class RoundedDialogFrame extends Container {
     const outer = super.render(width);
     this.framed = false;
     if (width < 3) return outer;
-    if (outer.some(hasRoundedCorners)) return outer;
+    // Only the child's outer rules mean it already draws a rounded frame. Scanning
+    // the whole body would misfire on content that merely contains box-drawing
+    // characters (e.g. pasting a diagram into the editor).
+    const firstNonEmpty = outer.find((line) => stripTerminalSequences(line).trim().length > 0);
+    const lastNonEmpty = [...outer].reverse().find((line) => stripTerminalSequences(line).trim().length > 0);
+    if (isRoundedEdge(firstNonEmpty ?? "") || isRoundedEdge(lastNonEmpty ?? "")) return outer;
     if (!outer.some(isDialogRule)) return outer;
 
     const requested = Math.max(0, Math.floor(this.getPad()));

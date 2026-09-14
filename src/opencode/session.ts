@@ -1,9 +1,8 @@
 import type { Event, OpencodeClient, Part, Permission, Session } from "@opencode-ai/sdk";
 import type { OpencodeClient as OpencodeV2Client } from "@opencode-ai/sdk/v2";
-import { Transcript, type QuestionView, type SessionPhase } from "../state/transcript.ts";
+import { Transcript, isNetworkError, type QuestionView, type SessionPhase } from "../state/transcript.ts";
 import type { PromptAttachment } from "../lib/attachments.ts";
 import { BOARD_WORKER_AGENT, DEFAULT_INTERACTIVE_AGENT, ORCHESTRATOR_AGENT, type AgentPermissionRule } from "../lib/agents.ts";
-import { parseSpeechIntent, speechGatePrompt, type SpeechIntent } from "../speech/gate.ts";
 
 export interface ModelChoice {
   providerID: string;
@@ -145,6 +144,7 @@ export class SessionController {
   private usageCache = new Map<string, UsageTotals>();
   private eventAbort: AbortController | undefined;
   private model: { providerID: string; modelID: string } | undefined;
+  private variant: string | undefined;
   private agent: string = DEFAULT_INTERACTIVE_AGENT;
   /** Serializes event handling so part/message ordering is deterministic. */
   private queue: Promise<void> = Promise.resolve();
@@ -201,6 +201,19 @@ export class SessionController {
       this.transcript.upsertMessage(item.info);
       for (const part of item.parts) this.transcript.upsertPart(part);
     }
+  }
+
+  /**
+   * Point the controller at a freshly started server, keeping the same session
+   * and the same `Transcript` instance. Needed when a change (e.g. disabling a
+   * skill) requires new opencode config, which the server reads only at startup.
+   */
+  async reconnect(options: { client: OpencodeClient; clientV2?: OpencodeV2Client; cwd?: string }): Promise<void> {
+    this.client = options.client;
+    this.clientV2 = options.clientV2;
+    if (options.cwd) this.cwd = options.cwd;
+    if (this.sessionId) await this.resume(this.sessionId);
+    else await this.subscribeEvents();
   }
 
   /**
@@ -379,8 +392,26 @@ export class SessionController {
         this.transcript.removePart(event.properties.messageID, event.properties.partID);
         break;
       case "session.status":
-        this.transcript.setPhase(event.properties.status.type === "retry" ? "retry" : event.properties.status.type === "busy" ? "busy" : "idle");
+        if (event.properties.status.type === "retry") {
+          this.transcript.setPhase("retry");
+          // A retry caused by a dropped connection is a reconnect, not a normal
+          // model hiccup, so the live status can say so immediately.
+          this.transcript.setReconnecting(isNetworkError(event.properties.status.message));
+        } else {
+          this.transcript.setPhase(event.properties.status.type === "busy" ? "busy" : "idle");
+        }
         break;
+      case "session.error": {
+        // Some failures arrive as an error without a retry status first; while a
+        // turn is in flight, a network error still means "reconnecting".
+        const error = event.properties.error as { name?: string; data?: { message?: string } } | undefined;
+        const message = error?.data?.message ?? error?.name ?? "";
+        if (this.transcript.phase !== "idle" && isNetworkError(message)) {
+          this.transcript.setPhase("retry");
+          this.transcript.setReconnecting(true);
+        }
+        break;
+      }
       case "session.idle":
         this.transcript.setPhase("idle");
         break;
@@ -409,17 +440,19 @@ export class SessionController {
     // A steer needs opencode's v2 endpoint (1.18.30+). If the v2 client is
     // absent or the route is unreachable, fall through to the v1 path so the
     // prompt still lands instead of being dropped.
+    const body = {
+      parts: [
+        ...(text ? [{ type: "text" as const, text }] : []),
+        ...attachments.map((file) => ({ type: "file" as const, mime: file.mime, filename: file.filename, url: file.url })),
+      ],
+      ...(this.model ? { model: this.model } : {}),
+      ...(this.agent ? { agent: this.agent } : {}),
+      ...(this.variant ? { variant: this.variant } : {}),
+    };
     await this.client.session.promptAsync({
       path: { id: this.sessionId },
       query: { directory: this.cwd },
-      body: {
-        parts: [
-          ...(text ? [{ type: "text" as const, text }] : []),
-          ...attachments.map((file) => ({ type: "file" as const, mime: file.mime, filename: file.filename, url: file.url })),
-        ],
-        ...(this.model ? { model: this.model } : {}),
-        ...(this.agent ? { agent: this.agent } : {}),
-      },
+      body,
     });
   }
 
@@ -507,6 +540,10 @@ export class SessionController {
 
   setModel(model: { providerID: string; modelID: string } | undefined): void {
     this.model = model;
+  }
+
+  setVariant(variant: string | undefined): void {
+    this.variant = variant;
   }
 
   setAgent(agent: string | undefined): void {
@@ -656,61 +693,39 @@ export class SessionController {
     );
   }
 
-  private helperSessionId: string | undefined;
+  /**
+   * Generate a short board-task title from its contract. Backs the lightweight
+   * "title agent"; titles stay stable unless the contract direction changes.
+   */
+  async generateTaskTitle(
+    source: string,
+    model: { providerID: string; modelID: string },
+    maxWords = 6,
+  ): Promise<string | undefined> {
+    return this.generateHelperText(
+      `In at most ${maxWords} words, name this engineering task as a title (for example "Cache parsed config" or "Fix worktree cleanup"). Describe the change itself, never the tool, command, or agent. Use no punctuation. Reply with only the title, no quotes.\n\n${source}`,
+      model,
+      maxWords,
+    );
+  }
 
   /**
-   * Classify a spoken turn as a clear, actionable request (to hand to the coding
-   * agent) or conversation. Runs on a dedicated helper session so it cannot
-   * interleave with title/status generation, and falls back to `undefined` on
-   * any failure so PersonaPlex can still answer.
+   * Generate a short board-task status: the stage the task is at toward the
+   * goal its title names. Changes more often than the title.
    */
-  async assessSpeechIntent(
+  async generateTaskStatus(
     source: string,
-    context: string[],
     model: { providerID: string; modelID: string },
-    timeoutMs = 4000,
-  ): Promise<SpeechIntent | undefined> {
-    const raw = await this.generateSpeechText(speechGatePrompt(source, context), model, timeoutMs);
-    if (raw === undefined) return undefined;
-    return parseSpeechIntent(raw, source);
-  }
-
-  private speechHelperSessionId: string | undefined;
-
-  private async speechHelperSession(): Promise<string> {
-    if (this.speechHelperSessionId) return this.speechHelperSessionId;
-    const session = (await this.client.session.create({
-      body: {},
-      query: { directory: this.cwd },
-      signal: AbortSignal.timeout(10_000),
-    })) as unknown as Session;
-    this.speechHelperSessionId = session.id;
-    return session.id;
-  }
-
-  private async generateSpeechText(
-    prompt: string,
-    model: { providerID: string; modelID: string },
-    timeoutMs: number,
+    maxWords = 5,
   ): Promise<string | undefined> {
-    try {
-      const id = await this.speechHelperSession();
-      const result = (await this.client.session.prompt({
-        path: { id },
-        query: { directory: this.cwd },
-        signal: AbortSignal.timeout(timeoutMs),
-        body: { parts: [{ type: "text", text: prompt }], model, agent: "title" },
-      })) as unknown as { parts?: Array<{ type: string; text?: string }> };
-      const text = (result?.parts ?? [])
-        .filter((part) => part.type === "text" && typeof part.text === "string")
-        .map((part) => part.text!.trim())
-        .filter(Boolean)
-        .join("\n");
-      return text || undefined;
-    } catch {
-      return undefined;
-    }
+    return this.generateHelperText(
+      `In at most ${maxWords} words, describe the stage this task is at toward its goal as a short phrase (for example "writing parser tests" or "waiting on merge"). Describe the stage, never the tool, command, or agent. Reply with only the phrase, no quotes.\n\n${source}`,
+      model,
+      maxWords,
+    );
   }
+
+  private helperSessionId: string | undefined;
 
   private async helperSession(): Promise<string> {
     if (this.helperSessionId) return this.helperSessionId;
@@ -746,14 +761,12 @@ export class SessionController {
     return cleanTitle(text, maxWords);
   }
 
-  /** Drop the reusable helper sessions (e.g. when idle or on directory change). */
+  /** Drop the reusable helper session (e.g. when idle or on directory change). */
   disposeHelper(): void {
-    for (const id of [this.helperSessionId, this.speechHelperSessionId]) {
-      if (!id) continue;
-      void this.client.session.delete({ path: { id }, query: { directory: this.cwd } }).catch(() => undefined);
+    if (this.helperSessionId) {
+      void this.client.session.delete({ path: { id: this.helperSessionId }, query: { directory: this.cwd } }).catch(() => undefined);
     }
     this.helperSessionId = undefined;
-    this.speechHelperSessionId = undefined;
   }
 
   async listModels(): Promise<ModelChoice[]> {

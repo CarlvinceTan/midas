@@ -83,6 +83,34 @@ test("the leading ! of a shell command takes the border color", () => {
   assert.match(line, /\x1b\[34m!\x1b\[39m/);
 });
 
+/** Editor body rows (border rules removed) with trailing padding trimmed. */
+const body = (editor: Editor, width: number): string[] =>
+  plain(editor.render(width))
+    .slice(1, -1)
+    .map((line) => line.replace(/ +$/, ""));
+
+test("a wrapped `!` command hangs its continuation under the command text", () => {
+  const editor = new Editor(tui, theme, { paddingX: 0 });
+  editor.setText("! echo aaaaaaaaaa bbbbbbbbbb cccccccccc");
+  assert.deepEqual(body(editor, 30), ["! echo aaaaaaaaaa bbbbbbbbbb", "  cccccccccc"]);
+});
+
+test("a multiline `!` command indents later lines by the prefix width", () => {
+  const editor = new Editor(tui, theme, { paddingX: 0 });
+  editor.setText("! one\nsecond\nthird");
+  assert.deepEqual(body(editor, 30), ["! one", "  second", "  third"]);
+
+  const bang = new Editor(tui, theme, { paddingX: 0 });
+  bang.setText("!! one\ntwo");
+  assert.deepEqual(body(bang, 30), ["!! one", "   two"]);
+});
+
+test("deleting the space after ! disables the hanging indent", () => {
+  const editor = new Editor(tui, theme, { paddingX: 0 });
+  editor.setText("!echo aaaaaaaaaa bbbbbbbbbb cccccccccc");
+  assert.deepEqual(body(editor, 30), ["!echo aaaaaaaaaa bbbbbbbbbb", "cccccccccc"]);
+});
+
 test("a voice-mode blue border colors the editor's rules", () => {
   const editor = new Editor(tui, theme, { paddingX: 0 });
   // The app installs this color while `/voice` is listening.

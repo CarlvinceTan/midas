@@ -14,6 +14,7 @@ import {
   runDurationMs,
   summarizeChain,
 } from "./run-model.ts";
+import { setMcpServerNames } from "./components/tool-call.ts";
 
 function message(id: string, role: "user" | "assistant", parts: PartView[], extra: Partial<MessageView> = {}): MessageView {
   return {
@@ -188,12 +189,36 @@ test("liveRunId keeps the steered turn live until the steer is picked up", () =>
 });
 
 test("summarizeChain produces ChatGPT-style category phrases", () => {
+  const skill = tool("t4", "skill");
+  if (skill.kind === "tool") skill.input = { name: "control" };
   const run = computeRuns([
     message("u1", "user", [text("u1t", "go")]),
-    message("a1", "assistant", [tool("t1", "bash"), tool("t2", "read"), tool("t3", "read"), tool("t4", "skill")]),
+    message("a1", "assistant", [tool("t1", "bash"), tool("t2", "read"), tool("t3", "read"), skill]),
   ])[0]!;
   const segments = buildRunSegments(run);
   const activity = segments.find((s) => s.kind === "activity");
   assert.ok(activity && activity.kind === "activity");
-  assert.equal(summarizeChain(activity.items), "Ran 1 command, read 2 files, used 1 tool");
+  assert.equal(summarizeChain(activity.items), "Ran 1 command, read 2 files, used Control skill");
+});
+
+test("activity summaries identify skills and MCP servers by name", () => {
+  const skill = tool("skill", "skill");
+  const mcp = tool("mcp", "davinci-resolve_folder");
+  if (skill.kind === "tool") skill.input = { name: "control" };
+  setMcpServerNames(["davinci-resolve"]);
+  try {
+    assert.equal(
+      summarizeChain([
+        { kind: "tool", part: skill as Extract<PartView, { kind: "tool" }> },
+        { kind: "tool", part: tool("bash", "bash") as Extract<PartView, { kind: "tool" }> },
+      ]),
+      "Used Control skill, ran 1 command",
+    );
+    assert.equal(
+      summarizeChain([{ kind: "tool", part: mcp as Extract<PartView, { kind: "tool" }> }]),
+      "Used Davinci Resolve MCP",
+    );
+  } finally {
+    setMcpServerNames([]);
+  }
 });

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getCapabilities, type EditorTheme, type MarkdownTheme, type SelectListTheme } from "@earendil-works/pi-tui";
+import { highlightCode as highlightPiCode } from "@earendil-works/pi-coding-agent";
 import { strikethrough, underline, bold as ansiBold, inverse as ansiInverse } from "../lib/ansi.ts";
 import { piAgentDir, loadPiSettings } from "../config/pi.ts";
 
@@ -266,9 +267,12 @@ export function loadTheme(name: string, mode?: ColorMode): Theme {
 
 let current: Theme | undefined;
 
+/** Theme used when neither midas nor pi settings name one. */
+export const DEFAULT_THEME_NAME = "onedark";
+
 export function initTheme(name?: string): Theme {
-  const themeName = name ?? loadPiSettings().theme ?? "onedark";
-  current = loadTheme(typeof themeName === "string" ? themeName : "onedark");
+  const themeName = name ?? loadPiSettings().theme ?? DEFAULT_THEME_NAME;
+  current = loadTheme(typeof themeName === "string" ? themeName : DEFAULT_THEME_NAME);
   return current;
 }
 
@@ -290,6 +294,17 @@ export function getMarkdownTheme(): MarkdownTheme {
     code: (text) => t.fg("mdCode", text),
     codeBlock: (text) => t.fg("mdCodeBlock", text),
     codeBlockBorder: (text) => t.fg("mdCodeBlockBorder", text),
+    // Fenced code blocks get per-token colours from pi's syntax highlighter,
+    // which maps highlight.js scopes onto the `syntax*` theme colours. Falls
+    // back to the flat code-block colour when the language is unknown or pi's
+    // theme singleton is not initialised yet.
+    highlightCode: (code, lang) => {
+      try {
+        return highlightPiCode(code, lang);
+      } catch {
+        return code.split("\n").map((line) => t.fg("mdCodeBlock", line));
+      }
+    },
     quote: (text) => t.fg("mdQuote", text),
     quoteBorder: (text) => t.fg("mdQuoteBorder", text),
     hr: (text) => t.fg("mdHr", text),

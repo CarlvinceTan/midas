@@ -32,3 +32,18 @@ test("autocomplete rows still fill the full frame width", () => {
   frame.addChild(editor);
   for (const line of plain(frame.render(40))) assert.equal(line.length, 40);
 });
+
+test("box-drawing characters in the input do not disable the frame", () => {
+  // Pasting a diagram into the editor puts `│`/`╰`/`╭` in the content rows; that
+  // must not be mistaken for the child already drawing a rounded frame.
+  const pasted = {
+    invalidate() {},
+    render: (): string[] => ["──────", "│ [x] Other │", "╰──────────╯", "──────"],
+  };
+  const frame = new RoundedDialogFrame(() => 1);
+  frame.addChild(pasted);
+  const lines = plain(frame.render(20));
+  assert.ok(lines[0]!.includes("╭") && lines[0]!.includes("╮"), `top rule not rounded: ${lines[0]}`);
+  assert.ok(lines.at(-1)!.includes("╰") && lines.at(-1)!.includes("╯"), `bottom rule not rounded: ${lines.at(-1)}`);
+  assert.ok(lines.some((line) => line.includes("│ [x] Other │")), "pasted content row missing");
+});

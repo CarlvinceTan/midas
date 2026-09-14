@@ -1,4 +1,5 @@
 import type { BashView, MessageView, ReasoningView, TextView, ToolView } from "../state/transcript.ts";
+import { formatMcpDisplayName, mcpServerDisplayName } from "./components/tool-call.ts";
 
 /**
  * Run/segment model behind the ChatGPT-style transcript:
@@ -226,7 +227,7 @@ export function formatSeconds(ms: number): string {
  */
 export function summarizeChain(items: ChainItem[]): string {
   const order: string[] = [];
-  const groups = new Map<string, { verb: string; noun: string; count: number }>();
+  const groups = new Map<string, { verb: string; noun: string; count: number; names?: string[] }>();
   const add = (key: string, verb: string, noun: string): void => {
     const existing = groups.get(key);
     if (existing) {
@@ -236,10 +237,25 @@ export function summarizeChain(items: ChainItem[]): string {
     groups.set(key, { verb, noun, count: 1 });
     order.push(key);
   };
+  const addNamed = (key: string, verb: string, noun: string, name: string): void => {
+    const existing = groups.get(key);
+    if (existing) {
+      existing.names ??= [];
+      if (!existing.names.includes(name)) existing.names.push(name);
+      return;
+    }
+    groups.set(key, { verb, noun, count: 1, names: [name] });
+    order.push(key);
+  };
   let reasoning = 0;
   for (const item of items) {
     if (item.kind === "reasoning") {
       reasoning += 1;
+      continue;
+    }
+    const mcp = mcpServerDisplayName(item.part.tool);
+    if (mcp) {
+      addNamed("mcp", "Used", "MCP", mcp);
       continue;
     }
     switch (item.part.tool) {
@@ -256,12 +272,24 @@ export function summarizeChain(items: ChainItem[]): string {
       case "ls": add("find", "Explored", "path"); break;
       case "webfetch":
       case "fetch": add("fetch", "Fetched", "page"); break;
+      case "skill": {
+        const input = item.part.input;
+        const raw = input.name ?? input.skill ?? input.skill_name;
+        if (typeof raw === "string" && raw.trim()) addNamed("skill", "Used", "skill", formatMcpDisplayName(raw));
+        else add("skill", "Used", "skill");
+        break;
+      }
       default: add("tool", "Used", "tool"); break;
     }
   }
   const parts = order.map((key, index) => {
-    const { verb, noun, count } = groups.get(key)!;
-    const label = `${verb} ${count} ${noun}${count === 1 ? "" : "s"}`;
+    const { verb, noun, count, names } = groups.get(key)!;
+    const joinedNames = names && names.length > 1
+      ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+      : names?.[0];
+    const label = joinedNames
+      ? `${verb} ${joinedNames} ${noun}${names!.length === 1 ? "" : "s"}`
+      : `${verb} ${count} ${noun}${count === 1 ? "" : "s"}`;
     return index === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1);
   });
   if (parts.length === 0) {
