@@ -36,6 +36,21 @@ test("session state round-trips cwd and `!` history", () => {
   });
 });
 
+test("a cancellation hold round-trips alongside the queue", () => {
+  withTempConfigDir(() => {
+    writeSessionState("ses_held", { queue: [{ text: "held", attachments: [] }], queueHold: true });
+    const stored = readSessionState("ses_held");
+    assert.equal(stored?.queueHold, true, "the hold survives a reload");
+    assert.deepEqual(stored?.queue, [{ text: "held", attachments: [] }]);
+    // A fresh write without the flag clears it.
+    writeSessionState("ses_held", { queue: [{ text: "held", attachments: [] }] });
+    assert.equal(readSessionState("ses_held")?.queueHold, undefined);
+    // A hold on its own still keeps the entry alive.
+    writeSessionState("ses_only_hold", { queueHold: true });
+    assert.equal(readSessionState("ses_only_hold")?.queueHold, true);
+  });
+});
+
 test("empty session state removes the entry", () => {
   withTempConfigDir(() => {
     writeSessionState("ses_a", { cwd: "/Users/x" });

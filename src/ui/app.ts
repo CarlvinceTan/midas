@@ -920,6 +920,17 @@ export class MidasApp {
   private queueDispatchedAt = -1;
   /** Pending debounced queue flush. */
   private queueFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * True while queued follow-ups are held back because the user cancelled the
+   * run that would have delivered them. Only newer, explicitly submitted work
+   * that genuinely completes may release it, so a cancellation's own idle can
+   * never masquerade as completion and leak the queue into the context.
+   */
+  private queueHold = false;
+  /** True once explicit work was submitted after a hold and is awaiting completion. */
+  private queueRearmActive = false;
+  /** True once that rearmed work was observed running, so a stale idle can't release it. */
+  private queueRearmBusy = false;
   /** Queue item already warned about a missing frozen payload, to avoid spam. */
   private reattachNotified: QueuedPrompt | undefined;
   /** Pending debounced draft save, and the session it belongs to. */
@@ -1181,8 +1192,7 @@ export class MidasApp {
     this.options.controller.transcript.subscribe(() => {
       // Debounce follow-up dispatch: a transient idle between steps must not
       // flush the whole queue at once.
-      if (this.options.controller.transcript.phase === "idle") this.scheduleQueueFlush();
-      else this.cancelQueueFlush();
+      this.syncQueueDelivery();
       this.tagSteers();
       this.syncOverlays();
       this.trackGeneration();
@@ -2193,7 +2203,12 @@ export class MidasApp {
 
   /** Persist the active session's working directory, `!` history and queue. */
   private persistSessionState(): void {
-    writeSessionState(this.options.controller.id, { cwd: this.options.cwd, bash: this.sessionBash, queue: this.queue });
+    writeSessionState(this.options.controller.id, {
+      cwd: this.options.cwd,
+      bash: this.sessionBash,
+      queue: this.queue,
+      ...(this.queueHold ? { queueHold: true } : {}),
+    });
     this.recordMidasSession();
   }
 
@@ -2217,6 +2232,11 @@ export class MidasApp {
   private async restoreSessionShellState(sessionId: string | undefined, fallbackCwd?: string): Promise<void> {
     const state = readSessionState(sessionId);
     this.sessionBash = state?.bash ?? [];
+    // A queue the user stopped stays stopped across a resume/reconnect: an idle
+    // refresh must never silently send the messages cancellation held back.
+    this.queueHold = state?.queueHold === true;
+    this.queueRearmActive = false;
+    this.queueRearmBusy = false;
     // Follow-ups that were still queued when the session was exited come back,
     // including the file chips and the payloads frozen when they were prepared.
     // A chip whose payload did not survive (over-cap, malformed or a legacy
@@ -2410,6 +2430,10 @@ export class MidasApp {
   }
 
   private async sendPrompt(text: string, attachments: PromptAttachment[] = []): Promise<void> {
+    // Explicit work submitted after a cancellation re-arms queue delivery: when
+    // this run genuinely completes, the follow-ups the user held back may flow
+    // again. A stale idle from the cancelled run cannot reach this point.
+    this.armQueueDelivery();
     this.sending = true;
     // A new turn starts collapsed; the status line can reveal its process again.
     this.liveExpandedFor = undefined;
@@ -2743,9 +2767,76 @@ export class MidasApp {
     });
   }
 
+  /**
+   * React to a transcript phase update for queue delivery. Busy cancels any
+   * pending flush; idle only schedules one when no cancellation hold is in
+   * effect. A held queue is released solely by the genuine completion of work
+   * that was explicitly submitted after the cancellation, so the cancelled
+   * run's own idle (or any stale/repeated one) can never drain it.
+   */
+  private syncQueueDelivery(): void {
+    const phase = this.options.controller.transcript.phase;
+    if (phase !== "idle") {
+      this.cancelQueueFlush();
+      if (this.queueHold && this.queueRearmActive) this.queueRearmBusy = true;
+      return;
+    }
+    if (this.queueHold) {
+      if (this.queueRearmActive && this.queueRearmBusy) {
+        this.releaseQueueHold();
+        this.scheduleQueueFlush();
+      }
+      return;
+    }
+    this.scheduleQueueFlush();
+  }
+
+  /**
+   * Hold the queue back on a user-initiated cancellation (Esc/Ctrl+C, /undo).
+   * Called BEFORE the abort is dispatched and cancels any flush already armed,
+   * so the abort's idle, an abort failure, metadata updates and the settle
+   * window all leave the follow-ups untouched.
+   */
+  private holdQueueDelivery(): void {
+    this.cancelQueueFlush();
+    this.queueHold = true;
+    this.queueRearmActive = false;
+    this.queueRearmBusy = false;
+    this.persistSessionState();
+  }
+
+  /** Note explicit work submitted after a hold, so its completion can release it. */
+  private armQueueDelivery(): void {
+    if (!this.queueHold || this.queueRearmActive) return;
+    this.queueRearmActive = true;
+    this.queueRearmBusy = false;
+  }
+
+  /** Release a cancellation hold so normal automatic delivery may resume. */
+  private releaseQueueHold(): void {
+    if (!this.queueHold) return;
+    this.queueHold = false;
+    this.queueRearmActive = false;
+    this.queueRearmBusy = false;
+    this.persistSessionState();
+  }
+
+  /**
+   * Release a hold after a discrete explicitly-run job (a steered `!` command).
+   * Only if the job's own explicit submission still owns the rearm: a fresh
+   * cancellation taken while the job was running must not be undone by its
+   * `finally` (that is exactly the "cancelled job flushes the queue" bug).
+   */
+  private releaseQueueHoldAndFlush(): void {
+    if (!this.queueHold || !this.queueRearmActive) return;
+    this.releaseQueueHold();
+    this.maybeFlushQueue();
+  }
+
   /** When the run finishes, run the next queued command, then the next prompt. */
   /** Debounce the queue flush so a transient idle between steps can't dispatch. */
   private scheduleQueueFlush(): void {
+    if (this.queueHold) return;
     if (this.queueFlushTimer) return;
     const timer = setTimeout(() => {
       this.queueFlushTimer = undefined;
@@ -2767,6 +2858,9 @@ export class MidasApp {
   }
 
   private maybeFlushQueue(): void {
+    // A user cancellation suppresses automatic delivery entirely until newer
+    // explicit work genuinely completes (or the user dequeues an item).
+    if (this.queueHold) return;
     if (this.sending || this.queueBusy) return;
     if (this.options.controller.transcript.phase !== "idle") return;
     // Only one follow-up per completed run: wait until the previously dispatched
@@ -3205,7 +3299,7 @@ export class MidasApp {
       this.tui.requestRender();
       return { consume: true };
     }
-    if (matchesKey(data, "super+enter")) {
+    if (matchesKey(data, "super+enter") && !isKeyRelease(data) && !isKeyRepeat(data)) {
       // cmd+enter steers: typed text first, otherwise the earliest queued
       // follow-up. With neither, let the key fall through unchanged.
       const raw = this.editor.getExpandedText();
@@ -3213,8 +3307,11 @@ export class MidasApp {
         this.steerTyped(raw);
         return { consume: true };
       }
-      if (this.isRunActive() && this.queue.length > 0) {
-        this.steerQueued();
+      // An empty cmd+enter explicitly dequeues only the top follow-up. While a
+      // run is active it steers into it; after a cancellation (idle but held) it
+      // starts a fresh turn, which re-arms delivery for the rest once it settles.
+      if (this.queue.length > 0 && (this.isRunActive() || this.queueHold)) {
+        this.consumeQueuedExplicitly();
         return { consume: true };
       }
       return undefined;
@@ -3234,7 +3331,10 @@ export class MidasApp {
       }
     }
     if (isCtrlCPress(data)) {
-      if (this.killShell()) return { consume: true };
+      if (this.killShell()) {
+        this.holdQueueDelivery();
+        return { consume: true };
+      }
       // Clear a non-empty draft first; only an empty input aborts or exits.
       if (this.editor.getText().length > 0) {
         // An edited follow-up goes back to the queue rather than being lost.
@@ -3246,7 +3346,7 @@ export class MidasApp {
         this.tui.requestRender();
         return { consume: true };
       }
-      if (this.options.controller.transcript.phase !== "idle") void this.options.controller.abort();
+      if (this.options.controller.transcript.phase !== "idle") this.abortRunAndHoldQueue();
       else this.quit();
       return { consume: true };
     }
@@ -3270,13 +3370,81 @@ export class MidasApp {
       return { consume: true };
     }
     if (matchesKey(data, "escape")) {
-      if (this.killShell()) return { consume: true };
+      if (this.killShell()) {
+        this.holdQueueDelivery();
+        return { consume: true };
+      }
       if (this.options.controller.transcript.phase !== "idle") {
-        void this.options.controller.abort();
+        this.abortRunAndHoldQueue();
+        return { consume: true };
+      }
+      // A flush already armed in the idle settle window is still a run the user
+      // is stopping: cancel it and hold rather than let the timer drain.
+      if (this.queueFlushTimer) {
+        this.holdQueueDelivery();
         return { consume: true };
       }
     }
     return undefined;
+  }
+
+  /**
+   * Cancel the active run without letting its idle deliver the queue. The hold
+   * is taken BEFORE the abort is dispatched so no success, failure or stale
+   * idle event can be mistaken for completion.
+   */
+  private abortRunAndHoldQueue(): void {
+    this.holdQueueDelivery();
+    void this.options.controller.abort().catch(() => undefined);
+  }
+
+  /**
+   * cmd+enter with an empty input explicitly dequeues only the earliest
+   * follow-up: steer it into a running turn, or run it as a fresh turn/command
+   * when idle (including after a cancellation). The rest stay queued, normal
+   * capability rules apply, and a missing frozen payload still refuses delivery.
+   */
+  private consumeQueuedExplicitly(): void {
+    const item = this.queue[0];
+    if (!item) return;
+    if (this.isRunActive()) {
+      this.steerQueued();
+      return;
+    }
+    // Never bypass the frozen-payload guard: an unresolved chip stays queued.
+    const unresolved = this.queuedFilesNeedingReattach(item);
+    if (unresolved.length > 0) {
+      this.refuseQueuedDelivery(item, unresolved);
+      return;
+    }
+    const shell = this.shellCommand(item.text);
+    this.queue.shift();
+    this.persistSessionState();
+    this.tui.requestRender();
+    this.armQueueDelivery();
+    if (shell) {
+      // A `!` command is discrete: run it, then let the queue resume.
+      this.queueBusy = true;
+      void this.runShellCommand(shell.command, shell.exclude)
+        .catch(() => undefined)
+        .finally(() => {
+          this.queueBusy = false;
+          this.releaseQueueHoldAndFlush();
+        });
+      return;
+    }
+    if (item.text.startsWith("/")) {
+      // A command runs to completion before anything after it, exactly as the
+      // automatic flush does; its own idle is what releases the hold.
+      this.queueBusy = true;
+      void this.runSlashCommand(item.text)
+        .catch(() => undefined)
+        .finally(() => {
+          this.queueBusy = false;
+        });
+      return;
+    }
+    void this.sendPrompt(this.deliveryText(item), item.attachments);
   }
 
   private syncOverlays(): void {
@@ -3682,6 +3850,11 @@ export class MidasApp {
       this.setActiveAgent(DEFAULT_AGENT);
       this.sessionBash = [];
       this.queue = [];
+      // A fresh session starts unheld; the outgoing session's hold was persisted
+      // above with its own queue.
+      this.queueHold = false;
+      this.queueRearmActive = false;
+      this.queueRearmBusy = false;
       this.restoreDraft(this.options.controller.id);
       this.transcriptView.reset();
       this.resetTitle();
@@ -3779,6 +3952,9 @@ export class MidasApp {
    */
   private async doUndo(): Promise<void> {
     if (this.isRunActive()) {
+      // /undo is a manual cancellation: hold the queue before aborting so the
+      // revert's idle cannot deliver follow-ups the user stopped.
+      this.holdQueueDelivery();
       try {
         await this.options.controller.abort();
       } catch {
