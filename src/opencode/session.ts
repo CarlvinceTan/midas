@@ -148,6 +148,12 @@ export class SessionController {
   private agent: string = DEFAULT_INTERACTIVE_AGENT;
   /** Serializes event handling so part/message ordering is deterministic. */
   private queue: Promise<void> = Promise.resolve();
+  /**
+   * Bumped whenever a session lifecycle event (status/idle/network error) lands.
+   * `runCommand` snapshots it so a rejected command cannot roll back a phase a
+   * newer event has already claimed.
+   */
+  private lifecycleRevision = 0;
 
   constructor(options: SessionControllerOptions) {
     this.client = options.client;
@@ -392,6 +398,7 @@ export class SessionController {
         this.transcript.removePart(event.properties.messageID, event.properties.partID);
         break;
       case "session.status":
+        this.lifecycleRevision += 1;
         if (event.properties.status.type === "retry") {
           this.transcript.setPhase("retry");
           // A retry caused by a dropped connection is a reconnect, not a normal
@@ -407,12 +414,14 @@ export class SessionController {
         const error = event.properties.error as { name?: string; data?: { message?: string } } | undefined;
         const message = error?.data?.message ?? error?.name ?? "";
         if (this.transcript.phase !== "idle" && isNetworkError(message)) {
+          this.lifecycleRevision += 1;
           this.transcript.setPhase("retry");
           this.transcript.setReconnecting(true);
         }
         break;
       }
       case "session.idle":
+        this.lifecycleRevision += 1;
         this.transcript.setPhase("idle");
         break;
       case "session.updated":
@@ -905,16 +914,30 @@ export class SessionController {
   /** Run a slash command as a new prompt in the session. */
   async runCommand(name: string, args: string): Promise<void> {
     if (!this.sessionId) throw new Error("No active session");
-    this.transcript.setPhase("busy");
-    await this.client.session.command({
-      path: { id: this.sessionId },
-      query: { directory: this.cwd },
-      body: {
-        command: name,
-        arguments: args,
-        ...(this.model ? { model: `${this.model.providerID}/${this.model.modelID}` } : {}),
-      },
-    });
+    // A command starts a turn like a prompt. Only an idle session owns the
+    // busy phase we set here: an already-busy or retrying session has a real
+    // turn in flight, so leave its phase (and reconnect flag) alone.
+    const wasIdle = this.transcript.phase === "idle";
+    const lifecycle = this.lifecycleRevision;
+    if (wasIdle) this.transcript.setPhase("busy");
+    try {
+      await this.client.session.command({
+        path: { id: this.sessionId },
+        query: { directory: this.cwd },
+        body: {
+          command: name,
+          arguments: args,
+          ...(this.model ? { model: `${this.model.providerID}/${this.model.modelID}` } : {}),
+          ...(this.agent ? { agent: this.agent } : {}),
+        },
+      });
+    } catch (error) {
+      // A rejected command must not strand the UI as busy. Recover the idle
+      // phase only if we set it and no newer lifecycle event has claimed the
+      // phase since; otherwise the session's live state wins.
+      if (wasIdle && this.lifecycleRevision === lifecycle) this.transcript.setPhase("idle");
+      throw error;
+    }
   }
 
   async loadPendingPermission(): Promise<Permission | undefined> {
