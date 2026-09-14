@@ -47,25 +47,66 @@ export interface Task extends Contract {
 }
 export interface Board { version: 1; tasks: Task[] }
 
-/** Convert a simple `*` glob to an anchored regexp. */
-function scopeGlob(pattern: string): RegExp {
-  return new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
+/** Marker for a scope that names every path (missing/empty scope). */
+const ANY_SCOPE = "*";
+
+/**
+ * A trailing `/` declares a subtree rooted at that directory, so it is
+ * equivalent to `<dir>/*` where `*` matches across separators. Every other
+ * scope is already a single-`*` glob or an exact path.
+ */
+function scopeToPattern(scope: string): string {
+  return scope.endsWith("/") ? `${scope}*` : scope;
+}
+
+/**
+ * True when the two supported globs can match at least one shared path. Each
+ * glob is an alternating sequence of literal text and `*` (which matches any
+ * run of characters, including `/`). The two globs are run as NFAs on a common
+ * input and the product is searched for a reachable accepting pair, so the
+ * answer is exact for this syntax: a `*` consumes whatever the other side needs,
+ * equal literals advance together, and unequal literals dead-end. This is
+ * sound (it never reports disjointness for a path both scopes match) while
+ * still proving disjoint literal prefixes disjoint instead of over-serialising.
+ */
+function patternsIntersect(p: string, q: string): boolean {
+  const width = q.length + 1;
+  const seen = new Set<number>([0]);
+  const queue: Array<[number, number]> = [[0, 0]];
+  while (queue.length) {
+    const [i, j] = queue.pop()!;
+    if (i === p.length && j === q.length) return true;
+    const pi = i < p.length ? p[i] : undefined;
+    const qj = j < q.length ? q[j] : undefined;
+    const next: Array<[number, number]> = [];
+    if (pi === "*") next.push([i + 1, j]); // Consume no input, move past the glob.
+    if (qj === "*") next.push([i, j + 1]);
+    if (pi !== undefined && qj !== undefined) {
+      if (pi === "*" && qj !== "*") next.push([i, j + 1]); // The glob swallows the other side's char.
+      if (qj === "*" && pi !== "*") next.push([i + 1, j]);
+      if (pi !== "*" && qj !== "*" && pi === qj) next.push([i + 1, j + 1]);
+    }
+    for (const [ni, nj] of next) {
+      const key = ni * width + nj;
+      if (!seen.has(key)) { seen.add(key); queue.push([ni, nj]); }
+    }
+  }
+  return false;
 }
 
 /**
  * True when two declared scopes could touch the same files. Exact paths match;
- * a trailing `/` covers descendants; `*` globs are honoured; a missing/empty
- * scope is treated as `["*"]` (overlaps everything) so correctness wins until a
- * task declares the files it may change.
+ * a trailing `/` covers descendants; `*` globs intersect whether or not either
+ * pattern literally contains the other; a missing/empty scope is treated as
+ * `["*"]` (overlaps everything) so correctness wins until a task declares the
+ * files it may change. Symmetric in its arguments.
  */
 export function scopesOverlap(a: string[], b: string[]): boolean {
-  const norm = (scope: string[]): string[] => scope.length ? scope : ["*"];
+  const norm = (scope: string[]): string[] => scope.length ? scope : [ANY_SCOPE];
   for (const x of norm(a)) {
     for (const y of norm(b)) {
-      if (x === "*" || y === "*" || x === y) return true;
-      if (x.endsWith("/") && y.startsWith(x)) return true;
-      if (y.endsWith("/") && x.startsWith(y)) return true;
-      if ((x.includes("*") && scopeGlob(x).test(y)) || (y.includes("*") && scopeGlob(y).test(x))) return true;
+      if (x === ANY_SCOPE || y === ANY_SCOPE || x === y) return true;
+      if (patternsIntersect(scopeToPattern(x), scopeToPattern(y))) return true;
     }
   }
   return false;
