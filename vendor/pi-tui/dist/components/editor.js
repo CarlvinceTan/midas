@@ -15,23 +15,31 @@ const PASTE_MARKER_SINGLE = /^\[paste #(\d+)( (\+\d+ lines|\d+ chars))?\]$/;
 /** Atomic image chips, e.g. `[Image: screenshot.png]`. */
 const IMAGE_MARKER_REGEX = /\[Image: [^\]\n]*\]/g;
 const IMAGE_MARKER_SINGLE = /^\[Image: [^\]\n]*\]$/;
+/** Atomic generic file chips, e.g. `[File: report.pdf]`. */
+const FILE_MARKER_REGEX = /\[File: [^\]\n]*\]/g;
+const FILE_MARKER_SINGLE = /^\[File: [^\]\n]*\]$/;
+/** A `[File: ...]` marker ending exactly at the cursor (used for typed input). */
+const FILE_MARKER_SUFFIX = /\[File: [^\]\n]*\]$/;
 /** Paths that become image chips when pasted/typed. */
 const IMAGE_PATH_REGEX = /(?:^|[\s'"(])((?:\/|~\/)[^\n]*?\.(?:png|jpe?g|gif|webp|bmp|heic|heif|tiff?))['")]?$/i;
-/** Check if a segment is an atomic marker (paste chunk or image chip). */
+/** Check if a segment is an atomic marker (paste chunk, image chip or file chip). */
 function isPasteMarker(segment) {
-    return (segment.length >= 10 && PASTE_MARKER_SINGLE.test(segment)) || IMAGE_MARKER_SINGLE.test(segment);
+    return ((segment.length >= 10 && PASTE_MARKER_SINGLE.test(segment)) ||
+        IMAGE_MARKER_SINGLE.test(segment) ||
+        FILE_MARKER_SINGLE.test(segment));
 }
 /** Render atomic markers in yellow so chips stand out from editable text. */
-function styleMarkers(text, bangColor, validImages, validPasteIds) {
+function styleMarkers(text, bangColor, validImages, validPasteIds, validFiles) {
     const styled = styleBashPrefix(text, bangColor);
-    if (!styled.includes("[paste #") && !styled.includes("[Image: "))
+    if (!styled.includes("[paste #") && !styled.includes("[Image: ") && !styled.includes("[File: "))
         return styled;
     return styled
         .replace(PASTE_MARKER_REGEX, (m) => {
             const id = Number.parseInt(m.slice(8), 10);
             return validPasteIds && validPasteIds.has(id) ? `\x1b[33m${m}\x1b[39m` : m;
         })
-        .replace(IMAGE_MARKER_REGEX, (m) => (validImages && validImages.has(m) ? `\x1b[33m${m}\x1b[39m` : m));
+        .replace(IMAGE_MARKER_REGEX, (m) => (validImages && validImages.has(m) ? `\x1b[33m${m}\x1b[39m` : m))
+        .replace(FILE_MARKER_REGEX, (m) => (validFiles && validFiles.has(m) ? `\x1b[33m${m}\x1b[39m` : m));
 }
 /**
  * Color a leading `!`/`!!` shell prefix with the editor's border color, so the
@@ -60,22 +68,38 @@ const UNICODE_SPACE_REGEX = /[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g;
 function displayImageName(name) {
     return name.replace(UNICODE_SPACE_REGEX, " ");
 }
+/** Control characters (including newlines) are never safe in a chip label. */
+const CONTROL_CHAR_REGEX = /[\u0000-\u001f\u007f]/g;
+/**
+ * Sanitize a filename into a chip label that can never break the `[File: ...]`
+ * marker syntax or leak a path separator. Paths are kept only in the payload,
+ * never in the visible text.
+ */
+function safeFileName(name) {
+    const cleaned = displayImageName(String(name ?? ""))
+        .replace(/\]/g, " ")
+        .replace(CONTROL_CHAR_REGEX, " ")
+        .trim();
+    return cleaned || "file";
+}
 /**
  * A segmenter that wraps Intl.Segmenter and merges graphemes that fall
  * within paste markers into single atomic segments.  This makes cursor
  * movement, deletion, word-wrap, etc. treat paste markers as single units.
  *
- * Only markers whose numeric ID exists in `validIds` are merged.
+ * Only markers whose numeric ID exists in `validIds` and whose exact text is
+ * present in `validImages`/`validFiles` are merged.
  */
-function segmentWithMarkers(text, baseSegmenter, validIds, validImages) {
+function segmentWithMarkers(text, baseSegmenter, validIds, validImages, validFiles) {
     const hasPaste = validIds.size > 0 && text.includes("[paste #");
     const hasImage = (validImages ? validImages.size > 0 : false) && text.includes("[Image: ");
+    const hasFile = (validFiles ? validFiles.size > 0 : false) && text.includes("[File: ");
     // Fast path: no markers in the text.
-    if (!hasPaste && !hasImage) {
+    if (!hasPaste && !hasImage && !hasFile) {
         return baseSegmenter.segment(text);
     }
-    // Find all marker spans (paste markers must have a valid ID; image chips
-    // are always atomic).
+    // Find all marker spans (paste markers must have a valid ID; image and file
+    // chips must be registered in their respective valid sets).
     const markers = [];
     if (hasPaste) {
         for (const m of text.matchAll(PASTE_MARKER_REGEX)) {
@@ -88,6 +112,13 @@ function segmentWithMarkers(text, baseSegmenter, validIds, validImages) {
     if (hasImage) {
         for (const m of text.matchAll(IMAGE_MARKER_REGEX)) {
             if (validImages && !validImages.has(m[0]))
+                continue;
+            markers.push({ start: m.index, end: m.index + m[0].length });
+        }
+    }
+    if (hasFile) {
+        for (const m of text.matchAll(FILE_MARKER_REGEX)) {
+            if (validFiles && !validFiles.has(m[0]))
                 continue;
             markers.push({ start: m.index, end: m.index + m[0].length });
         }
@@ -295,6 +326,20 @@ export class Editor {
     // path). Unlike imageAttachments this survives setText()/submit, so a marker
     // copied out of the transcript can be re-attached when pasted back.
     knownImageMarkers = new Map();
+    // Generic file chips: visible marker -> { path, id, name }. The marker is
+    // the only thing in the visible text; path and identity stay in the payload.
+    // Markers are unique even for same-basename files, so each chip owns its own
+    // payload and deleting one never touches another.
+    fileAttachments = new Map();
+    // Session-lifetime memory of file chips (marker -> payload); survives
+    // setText()/submit so a pasted marker can be re-attached.
+    knownFileMarkers = new Map();
+    // Optional host-supplied parser for generic file paths pasted into the
+    // editor. Returning undefined leaves ordinary paste behavior untouched.
+    filePasteHandler;
+    // Monotonic source of unique chip identities (distinguishes same-basename
+    // files from different directories).
+    fileAttachmentCounter = 0;
     // Bracketed paste mode buffering
     pasteBuffer = "";
     isInPaste = false;
@@ -337,9 +382,13 @@ export class Editor {
     validImageMarkers() {
         return new Set(this.imageAttachments.keys());
     }
-    /** Segment text with paste-marker awareness, only merging markers with valid IDs. */
+    /** Generic file-chip markers (typed `[File: ...]` text is plain). */
+    validFileMarkers() {
+        return new Set(this.fileAttachments.keys());
+    }
+    /** Segment text with paste-marker awareness, only merging valid markers. */
     segment(text, mode) {
-        return segmentWithMarkers(text, mode === "word" ? wordSegmenter : graphemeSegmenter, this.validPasteIds(), this.validImageMarkers());
+        return segmentWithMarkers(text, mode === "word" ? wordSegmenter : graphemeSegmenter, this.validPasteIds(), this.validImageMarkers(), this.validFileMarkers());
     }
     getPaddingX() {
         return this.paddingX;
@@ -536,7 +585,7 @@ export class Editor {
             const padding = " ".repeat(Math.max(0, contentWidth - lineVisibleWidth));
             const lineRightPadding = cursorInPadding ? rightPadding.slice(1) : rightPadding;
             // Render the line (no side borders, just horizontal lines above and below)
-            result.push(`${leftPadding}${styleMarkers(displayText, this.borderColor, this.validImageMarkers(), this.validPasteIds())}${padding}${lineRightPadding}`);
+            result.push(`${leftPadding}${styleMarkers(displayText, this.borderColor, this.validImageMarkers(), this.validPasteIds(), this.validFileMarkers())}${padding}${lineRightPadding}`);
         }
         // Render bottom border (with scroll indicator if more content below)
         const linesBelow = layoutLines.length - (this.scrollOffset + visibleLines.length);
@@ -1033,6 +1082,7 @@ export class Editor {
         this.pasteCounter = 0;
         // A wholesale text replacement drops any chips the old text carried.
         this.imageAttachments.clear();
+        this.fileAttachments.clear();
         this.setTextInternal(normalized);
     }
     /**
@@ -1085,6 +1135,122 @@ export class Editor {
                 this.knownImageMarkers.set(attachment.marker, attachment.path);
             }
         }
+    }
+    /**
+     * Pick a visible file-chip marker that is not already present in the text,
+     * so same-basename files from different directories each own a distinct
+     * chip. Only the (sanitized) filename is visible; the path stays in the
+     * payload.
+     */
+    uniqueFileMarker(name) {
+        const text = this.getText();
+        let candidate = `[File: ${name}]`;
+        let suffix = 1;
+        while (text.includes(candidate)) {
+            suffix++;
+            candidate = `[File: ${name} (${suffix})]`;
+        }
+        return candidate;
+    }
+    /**
+     * Insert an atomic `[File: name]` chip at the cursor, remembering its source
+     * path and a unique identity so the host can attach the file on submit.
+     * Returns the visible marker that was inserted.
+     */
+    insertFileAttachment(path, options = {}) {
+        if (!path)
+            return;
+        const name = safeFileName(options?.displayName || baseName(path));
+        const marker = this.uniqueFileMarker(name);
+        const id = options?.id || `file-${++this.fileAttachmentCounter}`;
+        const attachment = { marker, path, id, name };
+        this.fileAttachments.set(marker, attachment);
+        this.knownFileMarkers.set(marker, attachment);
+        // Always leave a plain space after the chip so following text does not
+        // glue onto it. The space is ordinary buffer text, not part of the chip.
+        const currentLine = this.state.lines[this.state.cursorLine] || "";
+        const separator = this.state.cursorCol < currentLine.length && currentLine[this.state.cursorCol] === " " ? "" : " ";
+        this.insertTextAtCursor(marker + separator);
+        return marker;
+    }
+    /** Generic file chips currently present in the text, with their payloads. */
+    getFileAttachments() {
+        const text = this.getText();
+        const result = [];
+        for (const attachment of this.fileAttachments.values()) {
+            if (text.includes(attachment.marker)) {
+                result.push({ ...attachment });
+            }
+        }
+        return result;
+    }
+    /**
+     * Re-register generic file chips (e.g. when restoring a saved draft) without
+     * re-inserting their text. Legacy `{ marker, path }` entries are accepted;
+     * missing identity/name fields are filled in.
+     */
+    setFileAttachments(attachments) {
+        this.fileAttachments.clear();
+        for (const attachment of attachments ?? []) {
+            if (!attachment || !attachment.marker)
+                continue;
+            const name = safeFileName(attachment.name || (attachment.path ? baseName(attachment.path) : "file"));
+            const id = attachment.id || `file-${++this.fileAttachmentCounter}`;
+            const record = { marker: attachment.marker, path: attachment.path, id, name };
+            this.fileAttachments.set(record.marker, record);
+            this.knownFileMarkers.set(record.marker, record);
+        }
+    }
+    /**
+     * Install (or clear) the host application's parser for generic file paths
+     * pasted into the editor. The handler receives the cleaned pasted text and
+     * returns the attachments to create, or undefined to leave the paste as
+     * ordinary text. This keeps filesystem/path policy in the app, not the
+     * vendor editor.
+     */
+    setFilePasteHandler(handler) {
+        this.filePasteHandler = typeof handler === "function" ? handler : undefined;
+    }
+    /**
+     * Normalize the value returned by a file paste handler into an array of
+     * `{ path, ... }` inputs, or undefined when the handler did not claim the
+     * paste.
+     */
+    normalizeFilePasteInputs(inputs) {
+        if (!inputs)
+            return undefined;
+        const list = Array.isArray(inputs) ? inputs : [inputs];
+        const result = [];
+        for (const input of list) {
+            if (!input)
+                continue;
+            if (typeof input === "string") {
+                if (input)
+                    result.push({ path: input });
+            }
+            else if (input.path) {
+                result.push(input);
+            }
+        }
+        return result.length > 0 ? result : undefined;
+    }
+    /**
+     * Only explicit insertion or paste may register a file chip. If a character
+     * just typed by hand completed a `[File: name]` marker whose only earlier
+     * occurrence was not in the buffer, drop any stale/session mapping so the
+     * typed lookalike stays plain text.
+     */
+    suppressTypedFileMarker(previousText) {
+        if (this.fileAttachments.size === 0)
+            return;
+        const line = this.state.lines[this.state.cursorLine] || "";
+        const match = FILE_MARKER_SUFFIX.exec(line.slice(0, this.state.cursorCol));
+        if (!match)
+            return;
+        const marker = match[0];
+        if (previousText.includes(marker))
+            return;
+        this.fileAttachments.delete(marker);
     }
     /**
      * Collapse a just-typed/pasted image path in front of the cursor into an
@@ -1174,8 +1340,12 @@ export class Editor {
         const line = this.state.lines[this.state.cursorLine] || "";
         const before = line.slice(0, this.state.cursorCol);
         const after = line.slice(this.state.cursorCol);
+        const textBeforeChar = this.getText();
         this.state.lines[this.state.cursorLine] = before + char + after;
         this.setCursorCol(this.state.cursorCol + char.length);
+        // Typed `[File: ...]` text must stay plain even if a chip by that name
+        // was remembered; only insertion/paste registers a file chip.
+        this.suppressTypedFileMarker(textBeforeChar);
         // A completed image path typed/dragged into the input becomes an atomic chip.
         this.maybeCollapseImagePath();
         if (this.onChange) {
@@ -1251,6 +1421,16 @@ export class Editor {
             if (knownPath)
                 this.imageAttachments.set(marker, knownPath);
         }
+        // The same re-attachment applies to generic file chips. Only exact
+        // markers we created/restored are revived; unknown literals stay plain.
+        for (const match of filteredText.matchAll(FILE_MARKER_REGEX)) {
+            const marker = match[0];
+            if (this.fileAttachments.has(marker))
+                continue;
+            const known = this.knownFileMarkers.get(marker);
+            if (known)
+                this.fileAttachments.set(marker, known);
+        }
         // A pasted image path (e.g. a screenshot dragged into the terminal)
         // becomes an atomic chip and is attached when the prompt is sent.
         const singleLine = filteredText.trim();
@@ -1258,6 +1438,18 @@ export class Editor {
             const imageMatch = singleLine.match(IMAGE_PATH_REGEX);
             if (imageMatch && imageMatch[1]) {
                 this.insertImageAttachment(imageMatch[1]);
+                return;
+            }
+        }
+        // Let the host application claim generic file paths. The handler owns
+        // path/filesystem policy; when it returns nothing the paste keeps its
+        // ordinary (single-line, multiline or large-paste) behavior.
+        if (this.filePasteHandler) {
+            const fileInputs = this.normalizeFilePasteInputs(this.filePasteHandler(filteredText));
+            if (fileInputs) {
+                for (const input of fileInputs) {
+                    this.insertFileAttachment(input.path, input);
+                }
                 return;
             }
         }
@@ -1328,9 +1520,10 @@ export class Editor {
     submitValue() {
         this.cancelAutocomplete();
         const result = this.expandPasteMarkers(this.state.lines.join("\n")).trim();
-        // Resolve image chips before clearing state so the host can attach the
-        // referenced files; the text alone only carries the `[Image: name]` label.
+        // Resolve chips before clearing state so the host can attach the
+        // referenced files; the text alone only carries the visible labels.
         const imageAttachments = this.getImageAttachments();
+        const fileAttachments = this.getFileAttachments();
         this.state = { lines: [""], cursorLine: 0, cursorCol: 0 };
         this.pastes.clear();
         this.pasteCounter = 0;
@@ -1341,7 +1534,7 @@ export class Editor {
         if (this.onChange)
             this.onChange("");
         if (this.onSubmit)
-            this.onSubmit(result, imageAttachments);
+            this.onSubmit(result, imageAttachments, fileAttachments);
     }
     handleBackspace() {
         this.exitHistoryBrowsing();
@@ -1950,7 +2143,7 @@ export class Editor {
         }
     }
     pushUndoSnapshot() {
-        this.undoStack.push({ state: this.state, pastes: this.pastes, pasteCounter: this.pasteCounter });
+        this.undoStack.push({ state: this.state, pastes: this.pastes, pasteCounter: this.pasteCounter, fileAttachments: this.fileAttachments });
     }
     undo() {
         this.exitHistoryBrowsing();
@@ -1960,6 +2153,11 @@ export class Editor {
         Object.assign(this.state, snapshot.state);
         this.pastes = snapshot.pastes;
         this.pasteCounter = snapshot.pasteCounter;
+        // File attachment payloads are part of undoable state so a deleted chip
+        // (and its path) comes back with the restored marker text.
+        if (snapshot.fileAttachments) {
+            this.fileAttachments = snapshot.fileAttachments;
+        }
         this.lastAction = null;
         this.preferredVisualCol = null;
         if (this.onChange) {
