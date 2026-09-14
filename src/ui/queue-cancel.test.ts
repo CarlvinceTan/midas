@@ -140,6 +140,12 @@ interface Harness {
   /** Set the abort behaviour for the next cancellation. */
   setAbortMode(mode: AbortMode): void;
   setPhaseOnPrompt(value: boolean): void;
+  /**
+   * Record the controller-side proof that the re-armed explicit turn genuinely
+   * completed. Without it the queue stays held, mirroring the real controller's
+   * fail-closed contract; the proof is consumed on release.
+   */
+  proveCompletion(): void;
   close(): void;
 }
 
@@ -155,6 +161,9 @@ function makeHarness(
   let abortCalls = 0;
   let abortMode: AbortMode = options.abort ?? "idle";
   let phaseOnPrompt = options.phaseOnPrompt ?? true;
+  // A completion proof is only ever produced by `proveCompletion`, so a bare
+  // busy/idle or stale cancellation idle can never release the hold.
+  let completionProven = false;
 
   const controller: Record<string, unknown> = {
     id: "session-1",
@@ -172,6 +181,12 @@ function makeHarness(
       abortCalls += 1;
       if (abortMode === "throw") throw new Error("abort failed");
       if (abortMode === "idle") transcript.setPhase("idle");
+    },
+    // Consumed once, exactly like the real SessionController.
+    consumeQueueCompletion(): boolean {
+      if (!completionProven) return false;
+      completionProven = false;
+      return true;
     },
     setCwd(): void {},
     setAgent(): void {},
@@ -211,6 +226,7 @@ function makeHarness(
     internals: raw,
     setAbortMode(mode: AbortMode): void { abortMode = mode; },
     setPhaseOnPrompt(value: boolean): void { phaseOnPrompt = value; },
+    proveCompletion(): void { completionProven = true; },
     close(): void {
       try { app.quit(); } catch { /* teardown is best-effort */ }
     },
@@ -460,6 +476,8 @@ test("a new explicit run releases the hold and resumes delivery when it complete
   await h.internals.handleSubmit("fresh work");
   busy(h);
   assert.equal(h.internals.queueHold, true, "the hold is not released merely by starting work");
+  // Only the controller's proof of that turn's genuine completion releases it.
+  h.proveCompletion();
   idle(h);
   await settleFlush();
 
@@ -490,6 +508,7 @@ test("a late idle from the cancelled run cannot drain the newly rearmed queue", 
 
   // The new run genuinely runs to completion; only then may the queue resume.
   busy(h);
+  h.proveCompletion();
   idle(h);
   await settleFlush();
   assert.deepEqual(h.promptCalls.map((call) => call.text), ["fresh work", "A"]);

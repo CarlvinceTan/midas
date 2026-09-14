@@ -1,4 +1,4 @@
-import type { Event, OpencodeClient, Part, Permission, Session } from "@opencode-ai/sdk";
+import type { Event, Message, OpencodeClient, Part, Permission, Session } from "@opencode-ai/sdk";
 import type { OpencodeClient as OpencodeV2Client } from "@opencode-ai/sdk/v2";
 import { Transcript, isNetworkError, type QuestionView, type SessionPhase } from "../state/transcript.ts";
 import type { PromptAttachment } from "../lib/attachments.ts";
@@ -154,6 +154,19 @@ export class SessionController {
    * newer event has already claimed.
    */
   private lifecycleRevision = 0;
+  /**
+   * Bumped on every prompt/command submission. `abort` snapshots it so a late
+   * abort acknowledgement cannot reset a newer turn (or session) to idle.
+   */
+  private submissionRevision = 0;
+  /**
+   * The newest explicit fresh turn whose genuine completion the queue may trust.
+   * It is fail-closed: `messageID` is bound from the backend's own user-message
+   * event and completion is only proven by a terminal assistant message that
+   * names it as parent. Anything else (unknown owner, stale history, abort,
+   * error, tool step, reconnect) leaves it unproven so the queue stays held.
+   */
+  private explicitTurn: { messageID?: string; terminal: boolean; failed: boolean } | undefined;
 
   constructor(options: SessionControllerOptions) {
     this.client = options.client;
@@ -171,6 +184,7 @@ export class SessionController {
   }
 
   async start(): Promise<void> {
+    this.explicitTurn = undefined;
     const session = (await this.client.session.create({
       body: {},
       query: { directory: this.cwd },
@@ -183,6 +197,9 @@ export class SessionController {
   }
 
   async resume(sessionId: string): Promise<void> {
+    // A resumed/reconnected session has no in-memory run ownership: the
+    // reloaded history must never be mistaken for a live completion.
+    this.explicitTurn = undefined;
     this.sessionId = sessionId;
     await this.subscribeEvents();
     // Fetch the session record first so a resumed run keeps its stored title.
@@ -228,6 +245,7 @@ export class SessionController {
    */
   async revertTo(messageId: string): Promise<void> {
     if (!this.sessionId) return;
+    this.explicitTurn = undefined;
     await this.client.session.revert({
       path: { id: this.sessionId },
       query: { directory: this.cwd },
@@ -386,6 +404,7 @@ export class SessionController {
     }
     switch (event.type) {
       case "message.updated":
+        this.trackExplicitTurn(event.properties.info);
         this.transcript.upsertMessage(event.properties.info);
         break;
       case "message.part.updated":
@@ -441,11 +460,16 @@ export class SessionController {
 
   async prompt(text: string, attachments: PromptAttachment[] = []): Promise<void> {
     if (!this.sessionId) throw new Error("No active session");
+    this.submissionRevision += 1;
     // Decide the delivery from the phase as it was *before* we mark the session
     // busy, so a steer is not mistaken for the fresh turn we start right after.
     const wasBusy = shouldSteer(this.transcript.phase);
     this.transcript.setPhase("busy");
     if (wasBusy && (await this.steer(text, attachments))) return;
+    // This v1 submission starts (or falls back to) a fresh turn whose genuine
+    // completion may release a held queue. Register the correlation before the
+    // request so the very first backend user message binds to it.
+    this.explicitTurn = { terminal: false, failed: false };
     // A steer needs opencode's v2 endpoint (1.18.30+). If the v2 client is
     // absent or the route is unreachable, fall through to the v1 path so the
     // prompt still lands instead of being dropped.
@@ -507,8 +531,56 @@ export class SessionController {
 
   async abort(): Promise<void> {
     if (!this.sessionId) return;
+    // The cancelled turn can never prove a genuine completion again.
+    this.explicitTurn = undefined;
+    const submission = this.submissionRevision;
     await this.client.session.abort({ path: { id: this.sessionId }, query: { directory: this.cwd } });
-    this.transcript.setPhase("idle");
+    // A newer prompt may have started while the abort was in flight (or this
+    // ack may arrive after the user's fresh work). Only clear the phase when
+    // nothing newer has been submitted, so a late acknowledgement cannot reset
+    // a live turn to idle and leak a held queue.
+    if (this.submissionRevision === submission) this.transcript.setPhase("idle");
+  }
+
+  /**
+   * Record backend message identity/terminal evidence for the tracked explicit
+   * turn. The first backend user message after registration binds its id; only
+   * a completed, error-free, non-tool-step assistant message whose parent is
+   * that exact id proves completion. Aborted/errored messages for the parent
+   * fail the turn closed so no later stale event can match it.
+   */
+  private trackExplicitTurn(info: Message): void {
+    const turn = this.explicitTurn;
+    if (!turn || turn.failed) return;
+    if (info.role === "user") {
+      if (turn.messageID === undefined) turn.messageID = info.id;
+      return;
+    }
+    if (turn.messageID === undefined || info.parentID !== turn.messageID) return;
+    if (info.error) {
+      turn.failed = true;
+      return;
+    }
+    // A tool step also stamps `time.completed`; `finish: "tool-calls"` marks it
+    // as nonterminal, so keep waiting for the step that actually ends the turn.
+    if (info.time?.completed !== undefined && info.finish !== undefined && info.finish !== "tool-calls") {
+      turn.terminal = true;
+    }
+  }
+
+  /**
+   * Consume a proven completion of the newest explicit fresh turn. Returns true
+   * exactly once, and only when a terminal assistant message for that turn's own
+   * user message was observed AND the session is idle. Old-parent history,
+   * aborted/error/tool-step messages, unknown owners, reconnect snapshots and
+   * bare stale idle events all return false, so the queue stays held.
+   */
+  consumeQueueCompletion(): boolean {
+    const turn = this.explicitTurn;
+    if (!turn || turn.failed || !turn.terminal) return false;
+    if (this.transcript.phase !== "idle") return false;
+    this.explicitTurn = undefined;
+    return true;
   }
 
   async respondPermission(permissionID: string, response: "once" | "always" | "reject"): Promise<void> {
@@ -914,12 +986,18 @@ export class SessionController {
   /** Run a slash command as a new prompt in the session. */
   async runCommand(name: string, args: string): Promise<void> {
     if (!this.sessionId) throw new Error("No active session");
+    this.submissionRevision += 1;
     // A command starts a turn like a prompt. Only an idle session owns the
     // busy phase we set here: an already-busy or retrying session has a real
     // turn in flight, so leave its phase (and reconnect flag) alone.
     const wasIdle = this.transcript.phase === "idle";
     const lifecycle = this.lifecycleRevision;
-    if (wasIdle) this.transcript.setPhase("busy");
+    if (wasIdle) {
+      this.transcript.setPhase("busy");
+      // An idle command is a fresh explicit turn: track its completion so a
+      // held queue can be released only by genuine terminal evidence.
+      this.explicitTurn = { terminal: false, failed: false };
+    }
     try {
       await this.client.session.command({
         path: { id: this.sessionId },
@@ -935,7 +1013,10 @@ export class SessionController {
       // A rejected command must not strand the UI as busy. Recover the idle
       // phase only if we set it and no newer lifecycle event has claimed the
       // phase since; otherwise the session's live state wins.
-      if (wasIdle && this.lifecycleRevision === lifecycle) this.transcript.setPhase("idle");
+      if (wasIdle && this.lifecycleRevision === lifecycle) {
+        this.transcript.setPhase("idle");
+        this.explicitTurn = undefined;
+      }
       throw error;
     }
   }

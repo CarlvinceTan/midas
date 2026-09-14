@@ -929,8 +929,6 @@ export class MidasApp {
   private queueHold = false;
   /** True once explicit work was submitted after a hold and is awaiting completion. */
   private queueRearmActive = false;
-  /** True once that rearmed work was observed running, so a stale idle can't release it. */
-  private queueRearmBusy = false;
   /** Queue item already warned about a missing frozen payload, to avoid spam. */
   private reattachNotified: QueuedPrompt | undefined;
   /** Pending debounced draft save, and the session it belongs to. */
@@ -2236,7 +2234,6 @@ export class MidasApp {
     // refresh must never silently send the messages cancellation held back.
     this.queueHold = state?.queueHold === true;
     this.queueRearmActive = false;
-    this.queueRearmBusy = false;
     // Follow-ups that were still queued when the session was exited come back,
     // including the file chips and the payloads frozen when they were prepared.
     // A chip whose payload did not survive (over-cap, malformed or a legacy
@@ -2769,26 +2766,40 @@ export class MidasApp {
 
   /**
    * React to a transcript phase update for queue delivery. Busy cancels any
-   * pending flush; idle only schedules one when no cancellation hold is in
-   * effect. A held queue is released solely by the genuine completion of work
-   * that was explicitly submitted after the cancellation, so the cancelled
-   * run's own idle (or any stale/repeated one) can never drain it.
+   * pending flush; idle flushes only when no cancellation hold is in effect.
+   * A held queue is released solely when the controller can prove the explicit
+   * work that re-armed delivery genuinely finished: a terminal assistant message
+   * for that turn's own user message, observed with the session idle. The
+   * cancelled run's own idle (or any stale/repeated one) therefore can never
+   * drain it, and unknown ownership fails closed.
    */
   private syncQueueDelivery(): void {
     const phase = this.options.controller.transcript.phase;
     if (phase !== "idle") {
       this.cancelQueueFlush();
-      if (this.queueHold && this.queueRearmActive) this.queueRearmBusy = true;
       return;
     }
     if (this.queueHold) {
-      if (this.queueRearmActive && this.queueRearmBusy) {
+      if (this.queueRearmActive && this.queueCompletionProven()) {
         this.releaseQueueHold();
         this.scheduleQueueFlush();
       }
       return;
     }
     this.scheduleQueueFlush();
+  }
+
+  /**
+   * Ask the controller whether the re-armed explicit turn is provably complete.
+   * The controller consumes the proof, so a duplicate completion or idle event
+   * cannot release (and thus drain) the queue twice. Fake controllers in tests
+   * may omit the method; absence means "not proven", never "released".
+   */
+  private queueCompletionProven(): boolean {
+    const controller = this.options.controller as SessionController & {
+      consumeQueueCompletion?: () => boolean;
+    };
+    return typeof controller.consumeQueueCompletion === "function" && controller.consumeQueueCompletion();
   }
 
   /**
@@ -2801,7 +2812,6 @@ export class MidasApp {
     this.cancelQueueFlush();
     this.queueHold = true;
     this.queueRearmActive = false;
-    this.queueRearmBusy = false;
     this.persistSessionState();
   }
 
@@ -2809,7 +2819,6 @@ export class MidasApp {
   private armQueueDelivery(): void {
     if (!this.queueHold || this.queueRearmActive) return;
     this.queueRearmActive = true;
-    this.queueRearmBusy = false;
   }
 
   /** Release a cancellation hold so normal automatic delivery may resume. */
@@ -2817,7 +2826,6 @@ export class MidasApp {
     if (!this.queueHold) return;
     this.queueHold = false;
     this.queueRearmActive = false;
-    this.queueRearmBusy = false;
     this.persistSessionState();
   }
 
@@ -3854,7 +3862,6 @@ export class MidasApp {
       // above with its own queue.
       this.queueHold = false;
       this.queueRearmActive = false;
-      this.queueRearmBusy = false;
       this.restoreDraft(this.options.controller.id);
       this.transcriptView.reset();
       this.resetTitle();
