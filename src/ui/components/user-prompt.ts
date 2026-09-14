@@ -13,11 +13,28 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
  */
 const UNICODE_SPACE_REGEX = /[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g;
 
-/** Atomic image chips, e.g. `[Image: screenshot.png]`, as the editor emits them. */
-const IMAGE_MARKER_REGEX = /\[Image: [^\]\n]*\]/g;
+/** Atomic image/file chips, e.g. `[Image: screenshot.png]` / `[File: report.pdf]`. */
+const ATTACHMENT_MARKER_REGEX = /\[(?:Image|File): [^\]\n]*\]/g;
 
-/** Yellow, matching the editor's `[Image: …]` chips. */
+/** Yellow, matching the editor's `[Image: …]` / `[File: …]` chips. */
 const IMAGE_MARKER_COLOR = "\x1b[33m";
+
+/**
+ * The machine-facing, labelled file-content sections the submit path appends
+ * after the visible prompt. They are for the model, not the transcript, so the
+ * card hides them and keeps the chip label as the user-facing summary.
+ */
+const UNTRUSTED_SECTION_REGEX =
+  /----- BEGIN UNTRUSTED FILE CONTENT: [\s\S]*?----- END UNTRUSTED FILE CONTENT: [^\n]*-----/g;
+
+/** Drop file-content sections and any blank gap they leave behind. */
+function visiblePromptText(text: string): string {
+  return text
+    .replace(UNTRUSTED_SECTION_REGEX, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
+}
 
 /**
  * User prompt card: markdown text inside a rounded, coloured border. Ported from
@@ -37,14 +54,15 @@ export class UserPromptCard extends Container {
   private rebuild(): void {
     this.clear();
     const contentBox = new Box(this.outputPad, 0);
-    const promptText = this.text.replace(UNICODE_SPACE_REGEX, " ");
-    // Every `[Image: …]` marker renders as the yellow chip in the TUI, wherever
-    // it came from (typed, pasted, re-edited queue, transcript copy). The real
-    // file is attached from the prompt's file parts when it is sent, so the
-    // agent still reads the actual image rather than this label. The chip is
-    // wrapped as inline code so markdown leaves it intact, then the code style
-    // paints it yellow and restores the prompt text colour. Only the card's
-    // border carries the mode colour; the body text stays the normal prompt colour.
+    const promptText = visiblePromptText(this.text).replace(UNICODE_SPACE_REGEX, " ");
+    // Every `[Image: …]` / `[File: …]` marker renders as the yellow chip in the
+    // TUI, wherever it came from (typed, pasted, re-edited queue, transcript
+    // copy). The real file is attached from the prompt's file parts / labelled
+    // content section when it is sent, so the agent still reads the actual file
+    // rather than this label. The chip is wrapped as inline code so markdown
+    // leaves it intact, then the code style paints it yellow and restores the
+    // prompt text colour. Only the card's border carries the mode colour; the
+    // body text stays the normal prompt colour.
     const promptTextColor = "userMessageText";
     const markdownTheme = {
       ...getMarkdownTheme(),
@@ -52,7 +70,7 @@ export class UserPromptCard extends Container {
     };
     contentBox.addChild(
       new Markdown(
-        promptText.replace(IMAGE_MARKER_REGEX, (marker) => `\`${marker}\``),
+        promptText.replace(ATTACHMENT_MARKER_REGEX, (marker) => `\`${marker}\``),
         0,
         0,
         markdownTheme,

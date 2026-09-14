@@ -13,12 +13,33 @@ export interface StoredBash {
   at: number;
 }
 
+/**
+ * A file payload frozen when a queued prompt was prepared. Persisting this keeps
+ * an edited/reloaded queue from silently re-reading a file that changed after it
+ * was attached (and from sending only its visible label).
+ */
+export interface StoredFrozenFile {
+  id?: string;
+  marker: string;
+  path: string;
+  name: string;
+  kind: "image" | "text";
+  /** Exact UTF-8 text, for `kind: "text"`. */
+  content?: string;
+  /** Exact data-URL attachment, for `kind: "image"`. */
+  attachment?: { mime: string; filename: string; url: string };
+}
+
 /** A queued follow-up retained so an exited session's queue survives a resume. */
 export interface StoredQueuedPrompt {
   text: string;
   attachments?: Array<{ mime: string; filename: string; url: string }>;
   /** Editor image chips (marker -> path) so an edited queue keeps them atomic. */
   chips?: Array<{ marker: string; path: string }>;
+  /** Editor file chips (marker -> path) so an edited queue keeps them atomic. */
+  files?: Array<{ marker: string; path: string; id?: string; name?: string }>;
+  /** File payloads read when the prompt was prepared. */
+  frozenFiles?: StoredFrozenFile[];
 }
 
 /** Client-side session state that opencode does not persist for us. */
@@ -41,6 +62,19 @@ const MAX_BASH = 200;
 const MAX_OUTPUT = 100_000;
 const MAX_QUEUE = 50;
 const MAX_ATTACHMENT_URL = 1_500_000;
+const MAX_FROZEN_CONTENT = 1_500_000;
+
+function frozenFilesWithinCaps(files: readonly StoredFrozenFile[] | undefined): StoredFrozenFile[] | undefined {
+  if (!files || files.length === 0) return undefined;
+  for (const file of files) {
+    if (file.kind === "image") {
+      if ((file.attachment?.url.length ?? 0) > MAX_ATTACHMENT_URL) return undefined;
+    } else if ((file.content?.length ?? 0) > MAX_FROZEN_CONTENT) {
+      return undefined;
+    }
+  }
+  return [...files];
+}
 
 export function sessionStatePath(): string {
   return join(midasConfigDir(), "session-state.json");
@@ -85,13 +119,18 @@ export function writeSessionState(sessionId: string | undefined, state: StoredSe
   }));
   // Keep the queue bounded; oversized inline attachments are dropped so an
   // image-heavy queue cannot bloat the state file (the text is still kept).
-  const queue = state.queue?.slice(-MAX_QUEUE).map((item) => ({
-    text: item.text,
-    ...(item.attachments
-      ? { attachments: item.attachments.filter((attachment) => attachment.url.length <= MAX_ATTACHMENT_URL) }
-      : {}),
-    ...(item.chips && item.chips.length > 0 ? { chips: item.chips } : {}),
-  }));
+  const queue = state.queue?.slice(-MAX_QUEUE).map((item) => {
+    const frozenFiles = frozenFilesWithinCaps(item.frozenFiles);
+    return {
+      text: item.text,
+      ...(item.attachments
+        ? { attachments: item.attachments.filter((attachment) => attachment.url.length <= MAX_ATTACHMENT_URL) }
+        : {}),
+      ...(item.chips && item.chips.length > 0 ? { chips: item.chips } : {}),
+      ...(item.files && item.files.length > 0 ? { files: item.files } : {}),
+      ...(frozenFiles ? { frozenFiles } : {}),
+    };
+  });
   if (!state.cwd && (!bash || bash.length === 0) && (!queue || queue.length === 0)) {
     if (!(sessionId in store)) return;
     delete store[sessionId];

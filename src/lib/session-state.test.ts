@@ -67,6 +67,43 @@ test("session state round-trips the queued follow-ups", () => {
   });
 });
 
+test("session state round-trips queued file chips and their frozen payloads", () => {
+  withTempConfigDir(() => {
+    const queue = [
+      {
+        text: "[File: notes.md] summarize",
+        attachments: [],
+        files: [{ marker: "[File: notes.md]", path: "/tmp/notes.md", id: "file-1", name: "notes.md" }],
+        frozenFiles: [
+          { id: "file-1", marker: "[File: notes.md]", path: "/tmp/notes.md", name: "notes.md", kind: "text" as const, content: "line1\n\tline2\n" },
+        ],
+      },
+    ];
+    writeSessionState("ses_files", { queue });
+    assert.deepEqual(readSessionState("ses_files")?.queue, queue);
+  });
+});
+
+test("a queue item whose frozen content exceeds the cap drops the payload, keeping the chip", () => {
+  withTempConfigDir(() => {
+    writeSessionState("ses_big", {
+      queue: [
+        {
+          text: "[File: big.md]",
+          files: [{ marker: "[File: big.md]", path: "/tmp/big.md" }],
+          frozenFiles: [
+            { marker: "[File: big.md]", path: "/tmp/big.md", name: "big.md", kind: "text" as const, content: "x".repeat(1_500_001) },
+          ],
+        },
+      ],
+    });
+    const stored = readSessionState("ses_big")!.queue![0]!;
+    assert.equal(stored.text, "[File: big.md]");
+    assert.deepEqual(stored.files, [{ marker: "[File: big.md]", path: "/tmp/big.md" }]);
+    assert.equal(stored.frozenFiles, undefined, "an oversized payload is dropped so it can be rehydrated, never sent as a bare label");
+  });
+});
+
 test("a queue on its own persists, is capped, and drops oversized attachments", () => {
   withTempConfigDir(() => {
     writeSessionState("ses_a", { queue: Array.from({ length: 80 }, (_, i) => ({ text: `q${i}`, attachments: [] })) });

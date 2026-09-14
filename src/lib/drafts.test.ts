@@ -36,6 +36,34 @@ test("drafts round-trip per session, including image chips", () => {
   });
 });
 
+test("drafts round-trip generic file chips with their identities", () => {
+  withTempConfigDir(() => {
+    writeDraft("ses_files", {
+      text: "[File: report.pdf] summarize this",
+      files: [
+        { marker: "[File: report.pdf]", path: "/a/report.pdf", id: "file-1", name: "report.pdf" },
+        { marker: "[File: report.pdf (2)]", path: "/b/report.pdf", id: "file-2", name: "report.pdf" },
+      ],
+    });
+    assert.deepEqual(readDraft("ses_files"), {
+      text: "[File: report.pdf] summarize this",
+      files: [
+        { marker: "[File: report.pdf]", path: "/a/report.pdf", id: "file-1", name: "report.pdf" },
+        { marker: "[File: report.pdf (2)]", path: "/b/report.pdf", id: "file-2", name: "report.pdf" },
+      ],
+    });
+  });
+});
+
+test("a file-only draft is kept, and removing its chip clears the draft", () => {
+  withTempConfigDir(() => {
+    writeDraft("ses_files", { text: "[File: notes.txt]", files: [{ marker: "[File: notes.txt]", path: "/tmp/notes.txt" }] });
+    assert.deepEqual(readDraft("ses_files")?.files, [{ marker: "[File: notes.txt]", path: "/tmp/notes.txt" }]);
+    writeDraft("ses_files", { text: "" });
+    assert.equal(readDraft("ses_files"), undefined);
+  });
+});
+
 test("emptying the input removes the stored draft", () => {
   withTempConfigDir(() => {
     writeDraft("ses_a", { text: "unsent" });
