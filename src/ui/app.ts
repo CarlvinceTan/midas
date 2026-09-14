@@ -602,6 +602,71 @@ interface QueuedPrompt {
   chips?: Array<{ marker: string; path: string }>;
 }
 
+/**
+ * Identity and stage of a board task captured when a delayed title/status
+ * helper request starts. The result is only written back while the task still
+ * matches, so a late response can never clobber newer board state.
+ */
+export interface TaskMetaSnapshot {
+  id: string;
+  revision: number;
+  status: Task["status"];
+  merge: Task["merge"];
+  attempts: number;
+}
+
+export function taskMetaSnapshot(task: Task): TaskMetaSnapshot {
+  return { id: task.id, revision: task.revision, status: task.status, merge: task.merge, attempts: task.attempts.length };
+}
+
+/**
+ * True when a helper result still describes the task it was requested for. An
+ * edit (revision bump), stage/merge/attempt change, or removal makes it stale.
+ */
+export function taskMetaWriteAllowed(snapshot: TaskMetaSnapshot, current: Task): boolean {
+  return (
+    current.id === snapshot.id &&
+    current.revision === snapshot.revision &&
+    current.status === snapshot.status &&
+    current.merge === snapshot.merge &&
+    current.attempts.length === snapshot.attempts
+  );
+}
+
+/**
+ * Bounded exponential backoff for the optional board metadata helpers. A
+ * rejection or timeout pauses further attempts, doubling the delay up to a cap,
+ * while a clean pass resets it so normal polling resumes. The clock is
+ * injectable so tests can exercise the schedule without waiting.
+ */
+export class MetadataBackoff {
+  private failures = 0;
+  private nextAttemptAt = 0;
+  constructor(
+    private readonly baseMs = 2_000,
+    private readonly maxMs = 60_000,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** True when another metadata pass may start. */
+  ready(): boolean {
+    return this.now() >= this.nextAttemptAt;
+  }
+
+  /** Record a failed pass and push the next attempt out by the capped delay. */
+  recordFailure(): void {
+    this.failures += 1;
+    const delay = Math.min(this.maxMs, this.baseMs * 2 ** Math.min(this.failures - 1, 30));
+    this.nextAttemptAt = this.now() + delay;
+  }
+
+  /** Clear the penalty after a pass with no helper failures. */
+  reset(): void {
+    this.failures = 0;
+    this.nextAttemptAt = 0;
+  }
+}
+
 export class MidasApp {
   private tui: TUI;
   private editor: Editor;
@@ -3939,6 +4004,8 @@ export class MidasApp {
   /** Last stage signature the status agent produced a phrase for, per task. */
   private progressSignatures = new Map<string, string>();
   private titlingTasks = false;
+  /** Bounded backoff after a helper rejection/timeout; keeps retries low-rate. */
+  private taskMetaBackoff = new MetadataBackoff();
 
   /**
    * Multitask mode runs the board in a detached daemon so task runs and merges
@@ -3978,11 +4045,22 @@ export class MidasApp {
     let board: TaskBoard;
     try { board = new TaskBoard(this.options.cwd); } catch { return; }
     const path = join(board.directory, "dispatch.log");
-    this.dispatchLogTimer = setInterval(() => {
-      try {
-        const size = statSync(path).size;
-        if (size < this.dispatchLogOffset) this.dispatchLogOffset = 0; // truncated/rotated
-        if (size === this.dispatchLogOffset) return;
+    this.dispatchLogTimer = setInterval(() => this.pollDispatchLog(path, board), 1000);
+    this.dispatchLogTimer.unref?.();
+  }
+
+  /**
+   * One poll tick. Draining the log is kept independent of board attention and
+   * metadata, so a quiet log still lets a newly blocked/clarify task surface and
+   * a failed helper is retried on a later tick. Background metadata is
+   * best-effort: its rejection must never escape as an unhandled rejection or
+   * stop the interval.
+   */
+  private pollDispatchLog(path: string, board: TaskBoard): void {
+    try {
+      const size = statSync(path).size;
+      if (size < this.dispatchLogOffset) this.dispatchLogOffset = 0; // truncated/rotated
+      if (size !== this.dispatchLogOffset) {
         const chunk = readFileSync(path, "utf8").slice(this.dispatchLogOffset);
         this.dispatchLogOffset = size;
         let added = false;
@@ -3992,11 +4070,12 @@ export class MidasApp {
           added = true;
         }
         if (added) { void this.refreshBranch(); this.tui.requestRender(); }
-      } catch { /* no log yet */ }
+      }
+    } catch { /* no log yet */ }
+    try {
       this.checkBoardAttention(board);
-      void this.refreshTaskMeta(board);
-    }, 1000);
-    this.dispatchLogTimer.unref?.();
+    } catch { /* a malformed board must not kill the poll */ }
+    void this.refreshTaskMeta(board).catch(() => { /* optional metadata is best-effort */ });
   }
 
   /**
@@ -4031,14 +4110,18 @@ export class MidasApp {
    */
   private async refreshTaskMeta(board: TaskBoard): Promise<void> {
     if (this.activeAgent !== ORCHESTRATOR_AGENT || this.titlingTasks) return;
+    if (!this.taskMetaBackoff.ready()) return;
     const model = this.effectiveModel();
     if (!model) return;
-    let tasks: Task[];
-    try { tasks = board.read().tasks; } catch { return; }
-    const active = tasks.filter((task) => task.status !== "cancelled" && task.merge !== "merged");
+    let active: Task[];
+    try {
+      const tasks = board.read().tasks;
+      active = tasks.filter((task) => task.status !== "cancelled" && task.merge !== "merged");
+    } catch { return; }
     if (active.length === 0) return;
     this.titlingTasks = true;
     let budget = 6;
+    let failed = false;
     try {
       for (const task of active) {
         if (budget <= 0) break;
@@ -4049,15 +4132,26 @@ export class MidasApp {
           `State: ${task.status}${task.merge !== "not-merged" ? ` (merge ${task.merge})` : ""}`,
           task.detail ? `Detail: ${task.detail}` : "",
         ].filter(Boolean).join("\n");
+        // Captured before the await: the write below only lands while the task
+        // is still the same revision and state, so a delayed result can never
+        // overwrite an edit, merge, cancel, or removal that happened meanwhile.
+        const snapshot = taskMetaSnapshot(task);
 
         // Title: stable unless the contract direction changed.
         if (task.titledRevision !== task.revision) {
           budget -= 1;
-          const title = await this.options.controller.generateTaskTitle(source, model, 6);
+          let title: string | undefined;
+          try {
+            title = await this.options.controller.generateTaskTitle(source, model, 6);
+          } catch {
+            failed = true;
+            continue;
+          }
           try {
             board.update(task.id, (t) => {
+              if (!taskMetaWriteAllowed(snapshot, t)) return;
               if (title && title !== t.title) t.title = title;
-              t.titledRevision = t.revision;
+              t.titledRevision = snapshot.revision;
             });
           } catch { /* removed */ }
         }
@@ -4067,16 +4161,31 @@ export class MidasApp {
         if (this.progressSignatures.get(task.id) !== signature) {
           if (budget <= 0) break;
           budget -= 1;
-          const status = await this.options.controller.generateTaskStatus(source, model, 5);
-          this.progressSignatures.set(task.id, signature);
-          if (status) {
-            try { board.update(task.id, (t) => { t.progress = status; }); } catch { /* removed */ }
+          let status: string | undefined;
+          try {
+            status = await this.options.controller.generateTaskStatus(source, model, 5);
+          } catch {
+            failed = true;
+            continue;
           }
+          let applied = false;
+          try {
+            board.update(task.id, (t) => {
+              if (!taskMetaWriteAllowed(snapshot, t)) return;
+              if (status) t.progress = status;
+              applied = true;
+            });
+          } catch { /* removed */ }
+          // Remember the stage only once its result was accepted; a stale write
+          // leaves the signature unset so the new stage is regenerated.
+          if (applied) this.progressSignatures.set(task.id, signature);
         }
       }
-      this.tui.requestRender();
     } finally {
       this.titlingTasks = false;
+      if (failed) this.taskMetaBackoff.recordFailure();
+      else this.taskMetaBackoff.reset();
+      this.tui.requestRender();
     }
   }
 
