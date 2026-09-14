@@ -7,6 +7,8 @@ export interface StoredDraft {
   text: string;
   /** Image chips referenced by `text`, so they re-attach when the draft is sent. */
   attachments?: Array<{ marker: string; path: string }>;
+  /** Generic file chips referenced by `text`, so they re-attach when the draft is sent. */
+  files?: Array<{ marker: string; path: string; id?: string; name?: string }>;
 }
 
 interface DraftRecord extends StoredDraft {
@@ -50,13 +52,15 @@ export function readDraft(sessionId: string | undefined): StoredDraft | undefine
   return {
     text: entry.text,
     ...(Array.isArray(entry.attachments) ? { attachments: entry.attachments } : {}),
+    ...(Array.isArray(entry.files) ? { files: entry.files } : {}),
   };
 }
 
 /** Persist a session's draft. An empty draft removes the entry. */
 export function writeDraft(sessionId: string | undefined, draft: StoredDraft): void {
   if (!sessionId) return;
-  const empty = draft.text.length === 0 && (draft.attachments?.length ?? 0) === 0;
+  const empty =
+    draft.text.length === 0 && (draft.attachments?.length ?? 0) === 0 && (draft.files?.length ?? 0) === 0;
   const store = readStore();
   if (empty) {
     if (!(sessionId in store)) return;
@@ -68,6 +72,7 @@ export function writeDraft(sessionId: string | undefined, draft: StoredDraft): v
     store[sessionId] = {
       text: draft.text,
       ...(draft.attachments && draft.attachments.length > 0 ? { attachments: draft.attachments } : {}),
+      ...(draft.files && draft.files.length > 0 ? { files: draft.files } : {}),
       updatedAt: Math.max(Date.now(), newest + 1),
     };
   }

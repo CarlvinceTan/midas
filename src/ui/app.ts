@@ -30,7 +30,16 @@ import { existsSync, readFileSync, statSync, unwatchFile, watchFile } from "node
 import { homedir } from "node:os";
 import { isAbsolute, basename, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { findImagePaths, readImageAttachment, type PromptAttachment } from "../lib/attachments.ts";
+import {
+  MAX_BATCH_BYTES,
+  MAX_BATCH_FILES,
+  findImagePaths,
+  parsePastedFilePaths,
+  readImageAttachment,
+  readPromptFiles,
+  type PromptAttachment,
+  type PromptFileRead,
+} from "../lib/attachments.ts";
 import type { AgentChoice, AuthMethod, AuthPrompt, CommandChoice, SessionController, ModelChoice } from "../opencode/session.ts";
 import { loadCachedAgentStats, readAgentStats, refreshAgentStats } from "../opencode/agent-stats.ts";
 import type { OpencodeClient, Session } from "@opencode-ai/sdk";
@@ -140,6 +149,82 @@ export function submitAction(input: {
  */
 export function ensureDispatcherOnSubmit(multitask: boolean, ensure: () => void): void {
   if (multitask) ensure();
+}
+
+/**
+ * A generic file chip, as the editor reports it on submit and exposes it live.
+ * The vendor editor always supplies `id`/`name`, but legacy restored chips may
+ * omit them, so they stay optional here.
+ */
+export interface FileChip {
+  marker: string;
+  path: string;
+  id?: string;
+  name?: string;
+}
+
+/** A file payload read once at prepare time, then frozen for the prompt's lifetime. */
+export interface FrozenFilePayload {
+  id?: string;
+  marker: string;
+  path: string;
+  name: string;
+  mime: string;
+  kind: "image" | "text";
+  byteLength: number;
+  /** Exact UTF-8 text, for `kind: "text"`. */
+  content?: string;
+  /** Exact data-URL attachment, for `kind: "image"`. */
+  attachment?: PromptAttachment;
+}
+
+/** One file handed to `formatUntrustedFileSections`. */
+export interface UntrustedFileSection {
+  name: string;
+  mime: string;
+  byteLength: number;
+  content: string;
+}
+
+/**
+ * Append labelled, explicitly-untrusted file-content sections to a prompt. The
+ * visible text (and its chip labels) is left untouched; contents are inserted
+ * verbatim so tabs, newlines and Unicode survive byte-for-byte. The label tells
+ * the model the section is untrusted data, never instructions.
+ */
+export function formatUntrustedFileSections(text: string, files: readonly UntrustedFileSection[]): string {
+  if (files.length === 0) return text;
+  const sections = files.map((file) => {
+    const header = `----- BEGIN UNTRUSTED FILE CONTENT: ${file.name} (${file.mime}, ${file.byteLength} bytes) -----`;
+    const footer = `----- END UNTRUSTED FILE CONTENT: ${file.name} -----`;
+    // Keep the content exact: strip at most the single trailing newline the
+    // fence already adds back, never normalize inner whitespace.
+    const body = file.content.endsWith("\n") ? file.content.slice(0, -1) : file.content;
+    return `${header}\n${body}\n${footer}`;
+  });
+  return `${text}\n\n${sections.join("\n\n")}`;
+}
+
+/** Explain a read/batch failure with the file name and a specific next step. */
+export function describeFileAttachmentError(error: { code: string; message: string; path?: string }): string {
+  const name = error.path ? basename(error.path) : "file";
+  switch (error.code) {
+    case "missing":
+      return `Couldn't attach ${name}: the file no longer exists. Remove its chip or fix the path.`;
+    case "directory":
+      return `Couldn't attach ${name}: that path is a directory, not a file.`;
+    case "unreadable":
+      return `Couldn't attach ${name}: the file could not be read. Check its permissions.`;
+    case "unsupported-binary":
+      return `Couldn't attach ${name}: binary files (including PDF) are not supported. Convert it to UTF-8 text or remove its chip.`;
+    case "oversize":
+      return `Couldn't attach ${name}: ${error.message}. Remove it or split the content.`;
+    case "batch-too-many":
+    case "batch-too-large":
+      return `Couldn't attach the files: ${error.message}. Remove some chips and try again.`;
+    default:
+      return `Couldn't attach ${name}: ${error.message}.`;
+  }
 }
 
 /**
@@ -617,11 +702,24 @@ class NoHintList implements Component {
 
 /** A follow-up waiting for the active run to settle. */
 interface QueuedPrompt {
+  /** Visible text (chip labels + prose); never carries inlined file contents. */
   text: string;
+  /** Exact image attachments (base64 data URLs) frozen at prepare time. */
   attachments: PromptAttachment[];
-  /** Editor chips (marker -> path) so editing the queue restores them yellow. */
+  /** Editor image chips (marker -> path) so editing the queue restores them. */
   chips?: Array<{ marker: string; path: string }>;
+  /** Editor file chips (marker -> path/id) so editing the queue restores them. */
+  files?: FileChip[];
+  /**
+   * File payloads read when the prompt was prepared. Frozen so an edit,
+   * re-queue or restart never silently re-reads a file that changed, and never
+   * appends the same content twice.
+   */
+  frozenFiles?: FrozenFilePayload[];
 }
+
+/** Outcome of turning visible input into a deliverable prompt. */
+type PreparedPrompt = { ok: true; prompt: QueuedPrompt } | { ok: false; error: string };
 
 /**
  * Identity and stage of a board task captured when a delayed title/status
@@ -717,6 +815,8 @@ export class MidasApp {
   private statsTimer?: ReturnType<typeof setInterval>;
   /** Input draft held while an overlay occupies the editor dock. */
   private overlayDraft: string | undefined;
+  private overlayImageChips: Array<{ marker: string; path: string }> = [];
+  private overlayFileChips: FileChip[] = [];
   private editorDock!: FramedEditorDock;
   private currentPermissionId: string | undefined;
   private currentQuestionId: string | undefined;
@@ -865,7 +965,17 @@ export class MidasApp {
     this.editor = new Editor(this.tui, getEditorTheme(), { paddingX: this.editorPadding() });
     this.editor.borderColor = borderColorFor(this.activeAgent);
     this.shellCwd = options.cwd;
-    this.editor.onSubmit = (text, imageAttachments) => void this.handleSubmit(text, imageAttachments);
+    this.editor.onSubmit = (text, imageAttachments, fileAttachments) =>
+      void this.handleSubmit(text, imageAttachments, fileAttachments);
+    // A paste that is *only* absolute/`~/`/`file://` paths becomes atomic file
+    // chips. Anything with prose, a relative path or a URL is left untouched, so
+    // a sentence that merely mentions a path never attaches that file. The
+    // parser is pure syntax and reads no file; the actual read happens on submit.
+    this.editor.setFilePasteHandler((text) => {
+      const paths = parsePastedFilePaths(text, this.shellCwd);
+      if (!paths) return undefined;
+      return paths.map((path) => ({ path }));
+    });
     this.editor.onChange = (text: string) => {
       // Only a real shell command ("! " / "!! ") colors the border; deleting the
       // space leaves "!cmd", which is sent as a normal prompt, so revert. Voice
@@ -1966,12 +2076,17 @@ export class MidasApp {
     return this.model ? { providerID: this.model.providerID, modelID: this.model.modelID } : undefined;
   }
 
-  /** Snapshot of the unsent input, including image chips, for persistence. */
+  /** Snapshot of the unsent input, including image and file chips, for persistence. */
   private currentDraft(): StoredDraft {
     const text = this.editor.getText();
     const attachments =
       typeof this.editor.getImageAttachments === "function" ? this.editor.getImageAttachments() : [];
-    return { text, ...(attachments.length > 0 ? { attachments } : {}) };
+    const files = typeof this.editor.getFileAttachments === "function" ? this.editor.getFileAttachments() : [];
+    return {
+      text,
+      ...(attachments.length > 0 ? { attachments } : {}),
+      ...(files.length > 0 ? { files } : {}),
+    };
   }
 
   /**
@@ -1986,7 +2101,7 @@ export class MidasApp {
       this.draftTimer = undefined;
     }
     const draft = this.currentDraft();
-    if (draft.text.length === 0 && (draft.attachments?.length ?? 0) === 0) {
+    if (draft.text.length === 0 && (draft.attachments?.length ?? 0) === 0 && (draft.files?.length ?? 0) === 0) {
       this.draftTimerSession = undefined;
       writeDraft(sessionId, draft);
       return;
@@ -2024,6 +2139,7 @@ export class MidasApp {
     const text = draft?.text ?? "";
     this.editor.setText(text);
     this.editor.setImageAttachments(draft?.attachments ?? []);
+    if (typeof this.editor.setFileAttachments === "function") this.editor.setFileAttachments(draft?.files ?? []);
     this.tui.requestRender();
   }
 
@@ -2053,8 +2169,15 @@ export class MidasApp {
   private async restoreSessionShellState(sessionId: string | undefined, fallbackCwd?: string): Promise<void> {
     const state = readSessionState(sessionId);
     this.sessionBash = state?.bash ?? [];
-    // Follow-ups that were still queued when the session was exited come back.
-    this.queue = (state?.queue ?? []).map((item) => ({ text: item.text, attachments: item.attachments ?? [], chips: item.chips }));
+    // Follow-ups that were still queued when the session was exited come back,
+    // including the file chips and the payloads frozen when they were prepared.
+    this.queue = (state?.queue ?? []).map((item) => ({
+      text: item.text,
+      attachments: item.attachments ?? [],
+      ...(item.chips ? { chips: item.chips } : {}),
+      ...(item.files ? { files: item.files } : {}),
+      ...(item.frozenFiles ? { frozenFiles: item.frozenFiles as FrozenFilePayload[] } : {}),
+    }));
     const target = directoryExists(state?.cwd) ? state.cwd : fallbackCwd;
     if (target && target !== this.options.cwd && directoryExists(target)) {
       await this.changeDirectory(target);
@@ -2066,6 +2189,7 @@ export class MidasApp {
   private async handleSubmit(
     text: string,
     imageAttachments?: Array<{ marker: string; path: string }>,
+    fileAttachments?: FileChip[],
   ): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -2073,8 +2197,14 @@ export class MidasApp {
     // A follow-up pulled from the queue for editing returns to its old slot.
     const editing = this.editingQueue;
     this.editingQueue = undefined;
+    // The editor clears on submit before this runs, so prefer the chips it
+    // handed us; direct callers (cmd+enter fallback) still have them live.
+    const images =
+      imageAttachments ?? (typeof this.editor.getImageAttachments === "function" ? this.editor.getImageAttachments() : []);
+    const files =
+      fileAttachments ?? (typeof this.editor.getFileAttachments === "function" ? this.editor.getFileAttachments() : []);
     this.editor.addToHistory(trimmed);
-    this.editor.setText("");
+    this.clearEditorKeepingChips(images, files);
     const multitask = this.activeAgent === ORCHESTRATOR_AGENT;
     const action = submitAction({
       multitask,
@@ -2133,8 +2263,28 @@ export class MidasApp {
     // idempotent sync so a session that lost the dispatch lease takes over
     // without ever starting a second loop.
     ensureDispatcherOnSubmit(multitask, () => this.syncDispatcher());
-    const prompt =
-      editing && editing.prompt.text === trimmed ? editing.prompt : this.preparePrompt(trimmed, imageAttachments);
+    // An edited queue entry whose visible text is unchanged reuses its frozen
+    // payloads, so re-submitting never re-reads a file or appends its content
+    // twice. Any edited text re-prepares, reusing the frozen payloads per chip.
+    const reused = editing && editing.prompt.text === trimmed ? editing.prompt : undefined;
+    let prompt: QueuedPrompt;
+    if (reused) {
+      prompt = reused;
+    } else {
+      const prepared = this.preparePrompt(trimmed, images, files, editing?.prompt.frozenFiles);
+      if (!prepared.ok) {
+        // Keep the input so an unsupported attachment stays recoverable instead
+        // of being silently dropped or submitted as a bare label.
+        this.editingQueue = editing;
+        this.editor.setText(text);
+        this.editor.setImageAttachments(images);
+        this.editor.setFileAttachments(files);
+        this.tui.requestRender();
+        this.fail(prepared.error);
+        return;
+      }
+      prompt = prepared.prompt;
+    }
     if (action === "queue") {
       this.enqueue(prompt);
       return;
@@ -2144,7 +2294,23 @@ export class MidasApp {
       else this.enqueue(prompt);
       return;
     }
-    await this.sendPrompt(prompt.text, prompt.attachments);
+    await this.sendPrompt(this.deliveryText(prompt), prompt.attachments);
+  }
+
+  /**
+   * Clear the editor after a submission while remembering its chips. The vendor
+   * keeps a chip's marker -> path memory separate from the text, so re-registering
+   * the submitted chips lets a recalled history entry revive them instead of
+   * showing an inert label; `getFileAttachments` still only reports chips whose
+   * marker is present in the text.
+   */
+  private clearEditorKeepingChips(
+    images: Array<{ marker: string; path: string }>,
+    files: FileChip[],
+  ): void {
+    this.editor.setText("");
+    if (images.length > 0 && typeof this.editor.setImageAttachments === "function") this.editor.setImageAttachments(images);
+    if (files.length > 0 && typeof this.editor.setFileAttachments === "function") this.editor.setFileAttachments(files);
   }
 
   /** Append to the follow-up queue and repaint its preview above the input. */
@@ -2170,9 +2336,12 @@ export class MidasApp {
     this.queue.splice(index, 1);
     this.editingQueue = { index, prompt: item };
     this.persistSessionState();
+    // Restore only the visible text; the frozen file content stays out of the
+    // editor so re-submitting cannot append it a second time.
     this.editor.setText(item.text);
-    // Restore the yellow image chips so they stay atomic and deletable.
+    // Restore the yellow image and file chips so they stay atomic and deletable.
     if (item.chips?.length) this.editor.setImageAttachments(item.chips);
+    if (item.files?.length) this.editor.setFileAttachments(item.files);
     this.tui.setFocus(this.editor);
     this.tui.requestRender();
   }
@@ -2194,15 +2363,21 @@ export class MidasApp {
   }
 
   /**
-   * Turn image chips (`[Image: name]` from the editor) and any raw image paths
-   * in the prompt into real file parts (base64 data URLs), so the model receives
-   * the image itself instead of a path it cannot read. Unreadable files are
-   * dropped with a toast. Chips are kept in the text as a label.
+   * Turn the editor's chips (or the chips captured on submit) into a
+   * deliverable prompt. Image chips and raw image paths become base64 file
+   * parts, exactly as before. Generic file chips are read once through the
+   * reader's batch limits and frozen; UTF-8 text is emitted verbatim in a
+   * labelled untrusted section (never whitespace-normalized), while binary and
+   * other unsupported files fail with a specific error so the caller can keep
+   * the input recoverable instead of dropping the attachment or sending a bare
+   * label.
    */
   private preparePrompt(
     text: string,
     imageAttachments?: Array<{ marker: string; path: string }>,
-  ): QueuedPrompt {
+    fileAttachments?: FileChip[],
+    frozenFiles?: readonly FrozenFilePayload[],
+  ): PreparedPrompt {
     let body = text;
     const attachments: PromptAttachment[] = [];
     const missing: string[] = [];
@@ -2229,7 +2404,110 @@ export class MidasApp {
       }
     }
     if (missing.length > 0) this.fail(`Couldn't read image: ${missing.join(", ")}`);
-    return { text: body.replace(/[ \t]{2,}/g, " ").trim(), attachments, chips: chips.filter((chip) => body.includes(chip.marker)) };
+
+    // Generic file chips: attach only the ones still present in the text. A
+    // chip whose marker was deleted (or was never explicitly attached) is left
+    // alone, so prose that merely mentions a path never reads that file.
+    const files = (
+      fileAttachments ??
+      (typeof this.editor.getFileAttachments === "function" ? this.editor.getFileAttachments() : [])
+    ).filter((chip) => body.includes(chip.marker));
+    if (files.length > MAX_BATCH_FILES) {
+      return { ok: false, error: `Couldn't attach the files: at most ${MAX_BATCH_FILES} files can be attached. Remove some chips.` };
+    }
+    // Reuse a frozen payload per chip identity so an edit/re-queue never
+    // re-reads a file that changed after it was attached.
+    const frozenByKey = new Map<string, FrozenFilePayload>();
+    for (const frozen of frozenFiles ?? []) frozenByKey.set(frozen.id ?? frozen.path, frozen);
+    const payloads = new Map<FileChip, FrozenFilePayload>();
+    const pending: FileChip[] = [];
+    for (const chip of files) {
+      const cached = frozenByKey.get(chip.id ?? chip.path);
+      if (cached && cached.marker === chip.marker) payloads.set(chip, cached);
+      else pending.push(chip);
+    }
+    if (pending.length > 0) {
+      const read = readPromptFiles(pending.map((chip) => chip.path));
+      if (!read.ok) return { ok: false, error: describeFileAttachmentError(read) };
+      read.files.forEach((file, index) => {
+        const chip = pending[index]!;
+        if (!file.ok) return; // `readPromptFiles` rejects the whole batch on failure
+        payloads.set(chip, this.frozenFileFor(chip, file));
+      });
+    }
+    const frozen: FrozenFilePayload[] = [];
+    let totalBytes = 0;
+    for (const chip of files) {
+      const payload = payloads.get(chip);
+      if (!payload) return { ok: false, error: `Couldn't attach ${chip.name ?? basename(chip.path)}.` };
+      frozen.push(payload);
+      totalBytes += payload.byteLength;
+      if (payload.kind === "image" && payload.attachment) attachments.push(payload.attachment);
+    }
+    if (totalBytes > MAX_BATCH_BYTES) {
+      return {
+        ok: false,
+        error: `Couldn't attach the files: they exceed the ${MAX_BATCH_BYTES}-byte batch limit. Remove some chips and try again.`,
+      };
+    }
+    return {
+      ok: true,
+      prompt: {
+        text: body.replace(/[ \t]{2,}/g, " ").trim(),
+        attachments,
+        chips: chips.filter((chip) => body.includes(chip.marker)),
+        files,
+        frozenFiles: frozen,
+      },
+    };
+  }
+
+  /** Freeze one reader result against the chip that requested it. */
+  private frozenFileFor(chip: FileChip, read: Extract<PromptFileRead, { ok: true }>): FrozenFilePayload {
+    const base = { id: chip.id, marker: chip.marker, path: read.path, name: read.filename, mime: read.mime, byteLength: read.byteLength };
+    if (read.kind === "image") return { ...base, kind: "image", attachment: read.attachment };
+    return { ...base, kind: "text", content: read.text };
+  }
+
+  /**
+   * The text actually sent to the controller: the visible prompt plus one
+   * labelled untrusted section per text file. Built from the frozen payloads so
+   * it is stable across queue flushes and never runs the whitespace normalizer
+   * over file contents.
+   */
+  private deliveryText(prompt: QueuedPrompt): string {
+    const textFiles = (prompt.frozenFiles ?? []).filter(
+      (file) => file.kind === "text" && prompt.text.includes(file.marker),
+    );
+    if (textFiles.length === 0) return prompt.text;
+    return formatUntrustedFileSections(
+      prompt.text,
+      textFiles.map((file) => ({
+        name: file.name,
+        mime: file.mime,
+        byteLength: file.byteLength,
+        content: file.content ?? "",
+      })),
+    );
+  }
+
+  /**
+   * Rebuild a restored queue item's payloads when persistence had to drop them
+   * (content over the per-item cap). Without this a resumed queue could send a
+   * bare label; with it, the file is re-read once at flush time.
+   */
+  private rehydrateQueuePrompt(prompt: QueuedPrompt): QueuedPrompt {
+    if ((prompt.files?.length ?? 0) === 0 || (prompt.frozenFiles?.length ?? 0) > 0) return prompt;
+    const prepared = this.preparePrompt(prompt.text, prompt.chips, prompt.files);
+    if (!prepared.ok) {
+      this.fail(prepared.error);
+      return prompt;
+    }
+    // The restored item already carries its frozen image attachments.
+    const extra = prepared.prompt.attachments.filter(
+      (candidate) => !prompt.attachments.some((held) => held.url === candidate.url),
+    );
+    return { ...prepared.prompt, attachments: [...prompt.attachments, ...extra] };
   }
 
   /** Run a `!` shell command locally with a persistent working directory. */
@@ -2451,7 +2729,8 @@ export class MidasApp {
         });
       return;
     }
-    void this.sendPrompt(next.text, next.attachments);
+    const prompt = this.rehydrateQueuePrompt(next);
+    void this.sendPrompt(this.deliveryText(prompt), prompt.attachments);
   }
 
   /** Real user messages in the transcript (notice/hidden rows excluded). */
@@ -2482,7 +2761,7 @@ export class MidasApp {
       void this.runShellCommand(shell.command, shell.exclude);
       return;
     }
-    this.steerPrompt(item);
+    this.steerPrompt(this.rehydrateQueuePrompt(item));
   }
 
   /**
@@ -2509,11 +2788,16 @@ export class MidasApp {
       void this.handleSubmit(text);
       return;
     }
-    // Resolve image chips before clearing the editor.
-    const prompt = this.preparePrompt(trimmed);
+    // Resolve the chips and read their files before clearing the editor; an
+    // unsupported attachment leaves the input intact so it stays recoverable.
+    const prepared = this.preparePrompt(trimmed);
+    if (!prepared.ok) {
+      this.fail(prepared.error);
+      return;
+    }
     this.editor.addToHistory(trimmed);
-    this.editor.setText("");
-    this.steerPrompt(prompt);
+    this.clearEditorKeepingChips(prepared.prompt.chips ?? [], prepared.prompt.files ?? []);
+    this.steerPrompt(prepared.prompt);
   }
 
   /**
@@ -2525,7 +2809,7 @@ export class MidasApp {
     // Show the steer immediately; the v2 queue does not always echo it back.
     const localId = this.options.controller.transcript.addLocalUserMessage(prompt.text, true, this.activeAgent);
     this.pendingSteers.push({ text: prompt.text, at: Date.now(), localId });
-    void this.sendPrompt(prompt.text, prompt.attachments);
+    void this.sendPrompt(this.deliveryText(prompt), prompt.attachments);
   }
 
   /**
@@ -4271,8 +4555,15 @@ export class MidasApp {
 
   private showOverlay(component: Component, _options?: OverlayOptions): void {
     if (this.tasksTimer) { clearInterval(this.tasksTimer); this.tasksTimer = undefined; }
-    // Preserve whatever was typed before the overlay takes over the input dock.
-    if (!this.overlayDraft) this.overlayDraft = this.editor.getText();
+    // Preserve whatever was typed before the overlay takes over the input dock,
+    // including its chips, so restoring it never leaves an inert label behind.
+    if (this.overlayDraft === undefined) {
+      this.overlayDraft = this.editor.getText();
+      this.overlayImageChips =
+        typeof this.editor.getImageAttachments === "function" ? this.editor.getImageAttachments() : [];
+      this.overlayFileChips =
+        typeof this.editor.getFileAttachments === "function" ? this.editor.getFileAttachments() : [];
+    }
     this.historyView = { index: -1, length: 0 };
     this.activeOverlay = component;
     this.editorDock.clear();
@@ -4289,7 +4580,11 @@ export class MidasApp {
     this.mountEditor();
     // Restore the draft if anything cleared it while the overlay was up.
     if (this.overlayDraft !== undefined) {
-      if (this.editor.getText() !== this.overlayDraft) this.editor.setText(this.overlayDraft);
+      if (this.editor.getText() !== this.overlayDraft) {
+        this.editor.setText(this.overlayDraft);
+        if (this.overlayImageChips.length > 0) this.editor.setImageAttachments(this.overlayImageChips);
+        if (this.overlayFileChips.length > 0) this.editor.setFileAttachments(this.overlayFileChips);
+      }
       this.overlayDraft = undefined;
     }
     this.tui.setFocus(this.editor);
