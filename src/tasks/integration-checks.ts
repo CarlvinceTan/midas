@@ -29,9 +29,28 @@ function gitRaw(cwd: string, ...args: string[]): Promise<string> {
   });
 }
 
-async function snapshot(cwd: string): Promise<string> {
-  await gitAsync(cwd, "add", "--all");
-  return gitAsync(cwd, "write-tree");
+/**
+ * The committed candidate is the only tree that will ever be merged, so the
+ * disposable worktree must hold exactly that tree while checks run and after
+ * they finish. `git status` is non-mutating: unlike the previous
+ * `git add --all` + `write-tree` baseline it never stages resolver leftovers
+ * into a new tree, which would let checks validate content the returned commit
+ * excludes. Any staged/unstaged/untracked change, or any HEAD/tree move, is a
+ * detected conflict that we fail closed on.
+ *
+ * Boundary: this detects drift at the moments we read the worktree; it is not an
+ * OS-level guarantee against a writer racing in between reads. The window is
+ * kept to the checks themselves and a detected conflict is always fatal.
+ */
+async function assertExactCandidate(worktree: string, commit: string, tree: string, phase: string): Promise<void> {
+  if (await gitAsync(worktree, "rev-parse", "HEAD") !== commit) {
+    throw new Error("Integration checks moved the candidate HEAD; refusing to merge unvalidated changes");
+  }
+  const headTree = await gitAsync(worktree, "rev-parse", "HEAD^{tree}");
+  const status = await gitAsync(worktree, "status", "--porcelain");
+  if (headTree !== tree || status) {
+    throw new Error(`Integration checks modified the candidate tree (${phase}); refusing to merge unvalidated changes`);
+  }
 }
 
 /**
@@ -84,6 +103,56 @@ export async function ignoredCollisions(cwd: string, paths: Iterable<string>): P
   return collided;
 }
 
+export interface ApplyCandidateOptions {
+  /**
+   * Test seam only. Runs after each path's validated content is written and
+   * before the target branch advances, so deterministic fixtures can simulate a
+   * concurrent human edit or a mid-write failure. Production callers omit it.
+   */
+  onPathApplied?: (path: string, status: string) => void | Promise<void>;
+}
+
+/**
+ * True when the path still holds exactly what this attempt wrote: the candidate
+ * blob in both the working tree and the index for an update, or no file at all
+ * for a deletion. `git diff` ignores untracked files, so a deletion is verified
+ * by existence instead — otherwise a human re-creating the path would look
+ * "unchanged" and be clobbered by rollback.
+ */
+async function stillHoldsApplied(cwd: string, candidate: string, path: string, status: string): Promise<boolean> {
+  if (status[0] === "D") return !existsSync(join(cwd, path));
+  const working = await gitAsync(cwd, "diff", "--quiet", candidate, "--", path).then(() => true).catch(() => false);
+  if (!working) return false;
+  return gitAsync(cwd, "diff", "--cached", "--quiet", candidate, "--", path).then(() => true).catch(() => false);
+}
+
+/** True when `path` exists as a blob (or symlink) in `commit`. */
+async function pathExistsIn(cwd: string, commit: string, path: string): Promise<boolean> {
+  try { await gitAsync(cwd, "cat-file", "-e", `${commit}:${path}`); return true; }
+  catch { return false; }
+}
+
+/**
+ * Undo our writes for the paths we applied, but only while they still hold the
+ * validated candidate: a path a human has since edited (working tree or index no
+ * longer matches the candidate) is left untouched. The restore target is the
+ * branch's *current* tip rather than the stale `base`, so a failed
+ * compare-and-swap caused by a concurrent advance restores the newer committed
+ * bytes instead of resurrecting the ones it superseded. Only the paths we wrote
+ * are considered, so unrelated staged/unstaged/untracked state is preserved.
+ */
+async function rollbackApplied(cwd: string, ref: string, base: string, candidate: string, applied: Array<{ path: string; status: string }>): Promise<void> {
+  let restoreTo = base;
+  try { restoreTo = await gitAsync(cwd, "rev-parse", "--verify", ref); } catch { /* ref moved/deleted: fall back to base */ }
+  for (const { path, status } of [...applied].reverse()) {
+    try {
+      if (!await stillHoldsApplied(cwd, candidate, path, status)) continue;
+      if (await pathExistsIn(cwd, restoreTo, path)) await gitAsync(cwd, "checkout", restoreTo, "--", path);
+      else await gitAsync(cwd, "rm", "--quiet", "--", path).catch(() => undefined);
+    } catch { /* best-effort targeted rollback of the paths already applied */ }
+  }
+}
+
 /**
  * After checks pass in the throwaway worktree, rewrite the human's checkout so
  * its tracked content for the merge's paths matches the validated candidate and
@@ -91,8 +160,13 @@ export async function ignoredCollisions(cwd: string, paths: Iterable<string>): P
  * touched: unrelated staged, unstaged and untracked files keep their bytes and
  * index entries. No stash/clean/reset-hard is ever used; a failure part-way
  * through restores just the paths already written.
+ *
+ * The branch update is a compare-and-swap against `base`: if a concurrent
+ * commit advanced the target after validation, `update-ref` fails instead of
+ * silently overwriting the newer tip, and the targeted rollback runs.
  */
-export async function applyValidatedCandidate(cwd: string, target: string, base: string, candidate: string): Promise<void> {
+export async function applyValidatedCandidate(cwd: string, target: string, base: string, candidate: string, options: ApplyCandidateOptions = {}): Promise<void> {
+  const ref = `refs/heads/${target}`;
   const tokens = (await gitRaw(cwd, "diff", "--name-status", "--no-renames", "-z", base, candidate)).split("\0");
   const applied: Array<{ path: string; status: string }> = [];
   try {
@@ -105,17 +179,14 @@ export async function applyValidatedCandidate(cwd: string, target: string, base:
       if (status[0] === "D") await gitAsync(cwd, "rm", "--quiet", "--", path);
       else await gitAsync(cwd, "checkout", candidate, "--", path);
       applied.push({ path, status });
+      if (options.onPathApplied) await options.onPathApplied(path, status);
     }
     // Advance the branch last, so a partial apply never leaves HEAD ahead of the
-    // working tree. `update-ref` is atomic; a failure rolls the paths back.
-    await gitAsync(cwd, "update-ref", `refs/heads/${target}`, candidate);
+    // working tree. The 3-argument form is a compare-and-swap: it only moves the
+    // ref while it still points at `base`, closing the validation-to-apply race.
+    await gitAsync(cwd, "update-ref", ref, candidate, base);
   } catch (error) {
-    for (const { path, status } of applied.reverse()) {
-      try {
-        if (status[0] === "A") await gitAsync(cwd, "rm", "--quiet", "--", path);
-        else await gitAsync(cwd, "checkout", base, "--", path);
-      } catch { /* best-effort targeted rollback of the paths already applied */ }
-    }
+    await rollbackApplied(cwd, ref, base, candidate, applied);
     throw error;
   }
 }
@@ -207,10 +278,14 @@ export async function prepareCandidate(options: PrepareCandidateOptions): Promis
     } else if (commit !== base) {
       throw new Error("Integration candidate is not a merge of the validated result");
     }
-    const before = await snapshot(worktree);
+    // Exact pre-check provenance: the resolver must not leave staged, unstaged
+    // or untracked side effects behind. Validating those would prove content the
+    // returned commit does not contain, so fail closed before running checks.
+    await assertExactCandidate(worktree, commit, tree, "resolver left uncommitted changes before validation");
     await runChecks(worktree);
-    if (await snapshot(worktree) !== before) throw new Error("Integration checks modified the candidate tree; refusing to merge unvalidated changes");
-    if (await gitAsync(worktree, "rev-parse", "HEAD") !== commit) throw new Error("Integration checks moved the candidate HEAD; refusing to merge unvalidated changes");
+    // Exact post-check provenance: checks may not change, add or remove content,
+    // move HEAD, or alter the tree the candidate promises.
+    await assertExactCandidate(worktree, commit, tree, "checkout changed during checks");
     return { commit, tree };
   } finally {
     await gitAsync(repoRoot, "worktree", "remove", "--force", worktree).catch(() => undefined);
