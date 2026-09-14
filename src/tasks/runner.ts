@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { once } from "node:events";
 import type { Session } from "@opencode-ai/sdk";
 import { TaskBoard, gitAsync, type Task, type Attempt } from "./board.ts";
+import { applyValidatedCandidate, changedPaths, dirtyPaths, ignoredCollisions, prepareCandidate } from "./integration-checks.ts";
 import { startServer } from "../opencode/server.ts";
 import { midasOpencodeConfig } from "../config/pi.ts";
 import { BOARD_WORKER_AGENT, MERGE_AGENT } from "../lib/agents.ts";
@@ -292,40 +293,6 @@ const mergeAgentResolve: ConflictResolver = async (task, cwd, output) => {
   }
 };
 
-/** Paths the merge would bring into the checkout: everything that differs between HEAD and the task result. */
-async function mergePaths(cwd: string, base: string, mergedCommit: string): Promise<Set<string>> {
-  const output = await gitAsync(cwd, "diff", "--name-only", base, mergedCommit);
-  return new Set(output.split("\n").map((line) => line.trim()).filter(Boolean));
-}
-
-/**
- * Locally dirty paths from `git status --porcelain`: staged, unstaged, renamed
- * (`R old -> new`, both sides) and untracked (`??`) entries. Used to check the
- * merge against the user's in-progress work before Git is asked to touch it.
- */
-async function dirtyPaths(cwd: string): Promise<Set<string>> {
-  const output = await gitAsync(cwd, "status", "--porcelain");
-  const paths = new Set<string>();
-  for (const line of output.split("\n")) {
-    if (!line.trim()) continue;
-    const entry = line.slice(3);
-    const arrow = entry.indexOf(" -> ");
-    if (arrow >= 0) {
-      paths.add(entry.slice(0, arrow));
-      paths.add(entry.slice(arrow + 4));
-    } else {
-      paths.add(entry);
-    }
-  }
-  return paths;
-}
-
-/** True while Git is mid-merge (a staged `--no-commit` merge or an unresolved conflict). */
-async function mergeInProgress(cwd: string): Promise<boolean> {
-  try { return Boolean(await gitAsync(cwd, "rev-parse", "-q", "--verify", "MERGE_HEAD")); }
-  catch { return false; }
-}
-
 export async function mergeTask(board: TaskBoard, id: string, output: OutputSink = discardOutput, resolveConflict: ConflictResolver = mergeAgentResolve): Promise<void> {
   board.get(id);
   const releaseTask = board.lock(`task-${id}`);
@@ -346,60 +313,65 @@ export async function mergeTask(board: TaskBoard, id: string, output: OutputSink
       const current = await gitAsync(board.cwd, "symbolic-ref", "--short", "HEAD");
       if (current !== task.target) return defer(`target ${task.target} is not checked out`);
       const base = await gitAsync(board.cwd, "rev-parse", "HEAD");
-      // Git itself only refuses a merge that would overwrite local changes, so
-      // only defer on a real path collision: a dirty file the merge would touch.
+      // Only defer on a real path collision: a dirty path the merge would touch.
       // Unrelated work-in-progress must not block the merge.
-      const incoming = await mergePaths(board.cwd, base, mergedCommit);
+      const incoming = await changedPaths(board.cwd, base, mergedCommit);
       const dirty = await dirtyPaths(board.cwd);
-      const overlap = [...incoming].filter((path) => dirty.has(path));
+      const ignored = await ignoredCollisions(board.cwd, incoming);
+      const overlap = [...incoming].filter((path) => dirty.has(path) || ignored.has(path));
       if (overlap.length) return defer(`local changes would be overwritten: ${overlap.join(", ")}`);
 
       board.update(id, (t) => { t.merge = "integrating"; t.mergeBlocked = undefined; t.detail = `Merging into ${task.target}`; });
       integrating = true;
-      // Stage the merge without committing so the post-merge checks run before
-      // HEAD moves. On failure `merge --abort` restores the pre-merge state and
-      // keeps unrelated local changes byte-identical (never `reset --hard`).
-      let staged = false;
-      try {
-        await gitAsync(board.cwd, "merge", "--no-edit", "--no-ff", "--no-commit", mergedCommit);
-        staged = await mergeInProgress(board.cwd);
-      } catch (error) {
-        const conflicted = (await gitAsync(board.cwd, "diff", "--name-only", "--diff-filter=U")).trim();
-        if (!conflicted) {
-          // Git's own refusal is the backstop: defer, do not mark the merge failed.
-          await gitAsync(board.cwd, "merge", "--abort").catch(() => undefined);
-          board.update(id, (t) => { t.merge = "not-merged"; });
+      // Validate the exact candidate tree in a disposable worktree. The checks
+      // never run in the human's checkout, so they cannot see unrelated WIP or
+      // silently rewrite a path that was already dirty there.
+      const candidate = await prepareCandidate({
+        repoRoot: board.cwd,
+        base,
+        resultCommit: mergedCommit,
+        task,
+        output,
+        resolveConflict,
+        runChecks: (cwd) => checks(task, cwd, output),
+      });
+
+      // The human's checkout may have moved while the checks ran. Revalidate
+      // HEAD, index and WIP before writing anything; an incompatible change
+      // defers instead of clobbering, and never advances the branch.
+      const stale = async (): Promise<boolean> => {
+        if (await gitAsync(board.cwd, "symbolic-ref", "--short", "HEAD").catch(() => "") !== task.target) {
           integrating = false;
-          return defer(`git merge refused: ${error instanceof Error ? error.message : String(error)}`);
+          board.update(id, (t) => { t.merge = "not-merged"; });
+          defer(`target ${task.target} is not checked out`);
+          return true;
         }
-        const conflictedPaths = conflicted.split("\n").map((path) => path.trim()).filter(Boolean);
-        try {
-          await resolveConflict(task, board.cwd, output);
-          // Stage only the conflicted paths; unrelated WIP must never be committed.
-          await gitAsync(board.cwd, "add", "--", ...conflictedPaths);
-          if (await gitAsync(board.cwd, "diff", "--name-only", "--diff-filter=U")) throw new Error("unresolved conflicts remain");
-          // `git diff --check` rejects leftover `<<<<<<<` / `>>>>>>>` markers.
-          try { await gitAsync(board.cwd, "diff", "--cached", "--check"); }
-          catch { throw new Error("merge left conflict markers"); }
-        } catch (resolveError) {
-          await gitAsync(board.cwd, "merge", "--abort").catch(() => undefined);
-          throw new Error(`Merge conflict unresolved: ${resolveError instanceof Error ? resolveError.message : String(resolveError)}`);
+        if (await gitAsync(board.cwd, "rev-parse", "HEAD") !== base) {
+          integrating = false;
+          board.update(id, (t) => { t.merge = "not-merged"; });
+          defer("target branch moved during integration checks");
+          return true;
         }
-        staged = true;
-      }
-      try {
-        const before = await gitAsync(board.cwd, "status", "--porcelain");
-        await checks(task, board.cwd, output);
-        if (await gitAsync(board.cwd, "status", "--porcelain") !== before) throw new Error("Integration checks changed files");
-        if (staged) await gitAsync(board.cwd, "commit", "--no-edit");
-        const result = await gitAsync(board.cwd, "rev-parse", "HEAD");
-        board.update(id, (t) => { t.merge = "merged"; t.mergedCommit = result; t.mergeBlocked = undefined; t.progress = undefined; t.detail = `Merged into ${task.target}`; });
-      } catch (error) {
-        // Checks failed or dirtied the tree: roll the staged merge back without
-        // disturbing unrelated local changes.
-        if (staged) await gitAsync(board.cwd, "merge", "--abort").catch(() => undefined);
-        throw error;
-      }
+        const candidatePaths = await changedPaths(board.cwd, base, candidate.commit);
+        const now = await dirtyPaths(board.cwd);
+        const ignoredNow = await ignoredCollisions(board.cwd, candidatePaths);
+        const appeared = [...candidatePaths].filter((path) => now.has(path) || ignoredNow.has(path));
+        if (appeared.length) {
+          integrating = false;
+          board.update(id, (t) => { t.merge = "not-merged"; });
+          defer(`local changes would be overwritten: ${appeared.join(", ")}`);
+          return true;
+        }
+        return false;
+      };
+      if (await stale()) return;
+
+      // Apply only the validated content and advance the target branch to the
+      // validated commit. Unrelated staged/unstaged/untracked state is untouched.
+      await applyValidatedCandidate(board.cwd, task.target, base, candidate.commit);
+      if (await gitAsync(board.cwd, "rev-parse", "HEAD") !== candidate.commit) throw new Error("Target branch tip does not match the validated candidate");
+      if (await gitAsync(board.cwd, "rev-parse", "HEAD^{tree}") !== candidate.tree) throw new Error("Committed tree does not match the validated candidate");
+      board.update(id, (t) => { t.merge = "merged"; t.mergedCommit = candidate.commit; t.mergeBlocked = undefined; t.progress = undefined; t.detail = `Merged into ${task.target}`; });
     });
   } catch (error) {
     if (integrating && board.get(id).merge !== "merged") board.update(id, (t) => { t.merge = "failed"; t.detail = `${t.detail}\n${String(error)}`; });
