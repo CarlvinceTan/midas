@@ -30,6 +30,38 @@ export interface EditorOptions {
     paddingX?: number;
     autocompleteMaxVisible?: number;
 }
+/** Options for `insertFileAttachment`. */
+export interface FileAttachmentOptions {
+    /** Visible chip label; defaults to the safe basename of `path`. */
+    displayName?: string;
+    /** Stable identity for this chip; defaults to a generated unique id. */
+    id?: string;
+}
+/** Input accepted by `setFileAttachments`; legacy `{ marker, path }` entries are valid. */
+export interface FileAttachmentInput {
+    marker: string;
+    path: string;
+    id?: string;
+    name?: string;
+}
+/** A generic file chip resolved from the current text. */
+export interface EditorFileAttachment {
+    marker: string;
+    path: string;
+    id: string;
+    name: string;
+}
+/** A file attachment requested by a paste handler. */
+export interface FilePasteInput {
+    path: string;
+    displayName?: string;
+    id?: string;
+}
+/**
+ * Host-supplied parser for generic file paths pasted into the editor. Return
+ * the attachments to create, or undefined to leave the paste untouched.
+ */
+export type FilePasteHandler = (text: string) => FilePasteInput | FilePasteInput[] | undefined;
 export declare class Editor implements Component, Focusable {
     private state;
     /** Focusable interface - set by TUI when focus changes */
@@ -68,7 +100,10 @@ export declare class Editor implements Component, Focusable {
     private preferredVisualCol;
     private snappedFromCursorCol;
     private undoStack;
-    onSubmit?: (text: string, imageAttachments: Array<{ marker: string; path: string }>) => void;
+    onSubmit?: (text: string, imageAttachments: Array<{
+        marker: string;
+        path: string;
+    }>, fileAttachments: EditorFileAttachment[]) => void;
     onChange?: (text: string) => void;
     disableSubmit: boolean;
     constructor(tui: TUI, theme: EditorTheme, options?: EditorOptions);
@@ -137,6 +172,21 @@ export declare class Editor implements Component, Focusable {
     getImageAttachments(): Array<{ marker: string; path: string }>;
     /** Re-register image chips (e.g. when restoring a saved draft) without re-inserting their text. */
     setImageAttachments(attachments: Array<{ marker: string; path: string }>): void;
+    /**
+     * Insert an atomic `[File: name]` chip at the cursor, remembering its source
+     * path and a unique identity. Only the sanitized filename is visible. The
+     * marker is unique per chip so same-basename files stay independent.
+     */
+    insertFileAttachment(path: string, options?: FileAttachmentOptions): string | undefined;
+    /** Generic file chips currently present in the text, with their payloads. */
+    getFileAttachments(): EditorFileAttachment[];
+    /** Re-register generic file chips (e.g. when restoring a saved draft) without re-inserting their text. */
+    setFileAttachments(attachments: FileAttachmentInput[]): void;
+    /**
+     * Install (or clear) the host parser for generic file paths pasted into the
+     * editor. Returning undefined leaves ordinary paste behavior untouched.
+     */
+    setFilePasteHandler(handler?: FilePasteHandler): void;
     /**
      * Normalize text for editor storage:
      * - Normalize line endings (\r\n and \r -> \n)
