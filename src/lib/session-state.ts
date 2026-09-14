@@ -69,6 +69,12 @@ export interface StoredSessionState {
   bash?: StoredBash[];
   /** Follow-ups still waiting when the session was last exited. */
   queue?: StoredQueuedPrompt[];
+  /**
+   * True when the queue is held because the user cancelled the run that would
+   * have delivered its follow-ups. Kept across exits/resumes so an idle refresh
+   * can never silently send messages the user stopped.
+   */
+  queueHold?: boolean;
 }
 
 interface SessionStateRecord extends StoredSessionState {
@@ -129,6 +135,7 @@ export function readSessionState(sessionId: string | undefined): StoredSessionSt
     ...(typeof entry.cwd === "string" ? { cwd: entry.cwd } : {}),
     ...(Array.isArray(entry.bash) ? { bash: entry.bash } : {}),
     ...(Array.isArray(entry.queue) ? { queue: entry.queue } : {}),
+    ...(entry.queueHold === true ? { queueHold: true } : {}),
   };
 }
 
@@ -171,7 +178,7 @@ export function writeSessionState(sessionId: string | undefined, state: StoredSe
       ...(unfrozenFiles.length > 0 ? { unfrozenFiles } : {}),
     };
   });
-  if (!state.cwd && (!bash || bash.length === 0) && (!queue || queue.length === 0)) {
+  if (!state.cwd && (!bash || bash.length === 0) && (!queue || queue.length === 0) && !state.queueHold) {
     if (!(sessionId in store)) return;
     delete store[sessionId];
   } else {
@@ -180,6 +187,7 @@ export function writeSessionState(sessionId: string | undefined, state: StoredSe
       ...(state.cwd ? { cwd: state.cwd } : {}),
       ...(bash && bash.length > 0 ? { bash } : {}),
       ...(queue && queue.length > 0 ? { queue } : {}),
+      ...(state.queueHold ? { queueHold: true } : {}),
       updatedAt: Math.max(Date.now(), newest + 1),
     };
   }
