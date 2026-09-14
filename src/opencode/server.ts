@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
-import { createOpencodeClient as createV2Client, type OpencodeClient as OpencodeV2Client } from "@opencode-ai/sdk/v2";
+import type { OpencodeClient } from "@opencode-ai/sdk";
+import type { OpencodeClient as OpencodeV2Client } from "@opencode-ai/sdk/v2";
+import { createServerClients, createServerTransport, type ServerTransport } from "./transport.ts";
 
 export interface ServerOptions {
   cwd: string;
@@ -11,6 +12,8 @@ export interface ServerOptions {
   /** Merged opencode config (passed inline via OPENCODE_CONFIG_CONTENT). */
   configContent?: string;
   timeoutMs?: number;
+  /** Test seam; overrides the per-server Node transport. */
+  transportFactory?: () => ServerTransport;
 }
 
 export interface RunningServer {
@@ -42,6 +45,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     bin = process.env.MIDAS_OPENCODE_BIN ?? "opencode",
     configContent,
     timeoutMs = 30_000,
+    transportFactory = createServerTransport,
   } = options;
 
   const args = ["serve", `--hostname=${hostname}`, `--port=${port}`];
@@ -61,58 +65,69 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     ...(configContent ? { OPENCODE_CONFIG_CONTENT: configContent } : {}),
   };
 
-  const proc = spawn(bin, args, {
-    cwd,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  // One transport per server: its agent is destroyed with this server and is
+  // never shared with another server, so closing one cannot abort another.
+  const transport = transportFactory();
+  let proc: ChildProcess | undefined;
+  try {
+    const child = spawn(bin, args, {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    proc = child;
 
-  const url = await new Promise<string>((resolve, reject) => {
-    let output = "";
-    const timer = setTimeout(() => {
-      proc.kill();
-      reject(new Error(`opencode server did not start within ${timeoutMs}ms.\n${output}`));
-    }, timeoutMs);
+    const url = await new Promise<string>((resolve, reject) => {
+      let output = "";
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error(`opencode server did not start within ${timeoutMs}ms.\n${output}`));
+      }, timeoutMs);
 
-    const onData = (chunk: Buffer): void => {
-      output += chunk.toString();
-      for (const line of output.split("\n")) {
-        if (line.includes("opencode server listening")) {
-          const match = line.match(LISTEN_RE);
-          if (match) {
-            clearTimeout(timer);
-            resolve(match[1]!);
-            return;
+      const onData = (chunk: Buffer): void => {
+        output += chunk.toString();
+        for (const line of output.split("\n")) {
+          if (line.includes("opencode server listening")) {
+            const match = line.match(LISTEN_RE);
+            if (match) {
+              clearTimeout(timer);
+              resolve(match[1]!);
+              return;
+            }
           }
         }
-      }
-    };
-    proc.stdout?.on("data", onData);
-    proc.stderr?.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
+      };
+      child.stdout?.on("data", onData);
+      child.stderr?.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+      });
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        reject(new Error(`Failed to launch '${bin}': ${error.message}`));
+      });
+      child.on("exit", (code) => {
+        clearTimeout(timer);
+        reject(new Error(`opencode server exited with code ${code}\n${output}`));
+      });
     });
-    proc.on("error", (error) => {
-      clearTimeout(timer);
-      reject(new Error(`Failed to launch '${bin}': ${error.message}`));
-    });
-    proc.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`opencode server exited with code ${code}\n${output}`));
-    });
-  });
 
-  const client = createOpencodeClient({ baseUrl: url, directory: cwd, responseStyle: "data" });
-  // Version-sensitive: steer delivery depends on the v2 `/api/session/{id}/prompt`
-  // route, which requires opencode 1.18.30+. The v2 client's durable prompt lives
-  // under `.v2.session.prompt`; `.session.prompt` is the legacy v1 message API.
-  const clientV2 = createV2Client({ baseUrl: url, directory: cwd, responseStyle: "data" });
-  return {
-    client,
-    clientV2,
-    url,
-    proc,
-    close() {
-      if (!proc.killed) proc.kill();
-    },
-  };
+    // Version-sensitive: steer delivery depends on the v2 `/api/session/{id}/prompt`
+    // route, which requires opencode 1.18.30+. The v2 client's durable prompt lives
+    // under `.v2.session.prompt`; `.session.prompt` is the legacy v1 message API.
+    const { client, clientV2 } = createServerClients({ baseUrl: url, cwd, fetch: transport.fetch });
+    return {
+      client,
+      clientV2,
+      url,
+      proc: child,
+      close() {
+        if (!child.killed) child.kill();
+        void transport.close().catch(() => undefined);
+      },
+    };
+  } catch (error) {
+    if (proc && proc.exitCode === null && proc.signalCode === null) proc.kill();
+    await transport.close().catch(() => undefined);
+    throw error;
+  }
 }
