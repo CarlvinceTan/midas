@@ -929,6 +929,14 @@ export class MidasApp {
   private queueHold = false;
   /** True once explicit work was submitted after a hold and is awaiting completion. */
   private queueRearmActive = false;
+  /**
+   * A proven completion of the newest explicit turn, cached so it authorizes at
+   * most one automatic dequeue. Every automatic delivery (held or not) needs a
+   * fresh grant; a bare idle, a local command's `finally`, or a replayed older
+   * turn never creates one. Spent when the item is dispatched, or discarded when
+   * the user stops the queue or dequeues explicitly.
+   */
+  private queueGrant = false;
   /** Queue item already warned about a missing frozen payload, to avoid spam. */
   private reattachNotified: QueuedPrompt | undefined;
   /** Pending debounced draft save, and the session it belongs to. */
@@ -2234,6 +2242,8 @@ export class MidasApp {
     // refresh must never silently send the messages cancellation held back.
     this.queueHold = state?.queueHold === true;
     this.queueRearmActive = false;
+    // A restored session has no live completion ownership.
+    this.queueGrant = false;
     // Follow-ups that were still queued when the session was exited come back,
     // including the file chips and the payloads frozen when they were prepared.
     // A chip whose payload did not survive (over-cap, malformed or a legacy
@@ -2780,26 +2790,48 @@ export class MidasApp {
       return;
     }
     if (this.queueHold) {
-      if (this.queueRearmActive && this.queueCompletionProven()) {
-        this.releaseQueueHold();
-        this.scheduleQueueFlush();
-      }
+      // A stopped queue is released only by proven completion of the explicit
+      // work that re-armed it; that proof then authorizes exactly one dequeue.
+      // A bare idle (including after reconnect with unknown ownership) keeps
+      // the hold; the user's empty cmd+enter remains the explicit way out.
+      if (!this.queueRearmActive) return;
+      if (!this.queueCompletionProven()) return;
+      this.releaseQueueHold();
+      this.scheduleQueueFlush();
       return;
     }
     this.scheduleQueueFlush();
   }
 
   /**
-   * Ask the controller whether the re-armed explicit turn is provably complete.
-   * The controller consumes the proof, so a duplicate completion or idle event
+   * Ask the controller whether the newest explicit turn is provably complete,
+   * caching the proof so it authorizes exactly one automatic dequeue. The
+   * controller consumes its own proof, so a duplicate completion or idle event
    * cannot release (and thus drain) the queue twice. Fake controllers in tests
    * may omit the method; absence means "not proven", never "released".
    */
   private queueCompletionProven(): boolean {
+    if (this.queueGrant) return true;
     const controller = this.options.controller as SessionController & {
       consumeQueueCompletion?: () => boolean;
     };
-    return typeof controller.consumeQueueCompletion === "function" && controller.consumeQueueCompletion();
+    if (typeof controller.consumeQueueCompletion === "function" && controller.consumeQueueCompletion()) {
+      this.queueGrant = true;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Spend any pending automatic grant so an explicit key cannot cause a second
+   * automatic dequeue. Used when the user stops the queue or dequeues an item.
+   */
+  private discardQueueGrant(): void {
+    this.queueGrant = false;
+    const controller = this.options.controller as SessionController & {
+      consumeQueueCompletion?: () => boolean;
+    };
+    if (typeof controller.consumeQueueCompletion === "function") controller.consumeQueueCompletion();
   }
 
   /**
@@ -2812,6 +2844,8 @@ export class MidasApp {
     this.cancelQueueFlush();
     this.queueHold = true;
     this.queueRearmActive = false;
+    // The cancelled turn is not a completion: drop any proof it might carry.
+    this.discardQueueGrant();
     this.persistSessionState();
   }
 
@@ -2827,18 +2861,6 @@ export class MidasApp {
     this.queueHold = false;
     this.queueRearmActive = false;
     this.persistSessionState();
-  }
-
-  /**
-   * Release a hold after a discrete explicitly-run job (a steered `!` command).
-   * Only if the job's own explicit submission still owns the rearm: a fresh
-   * cancellation taken while the job was running must not be undone by its
-   * `finally` (that is exactly the "cancelled job flushes the queue" bug).
-   */
-  private releaseQueueHoldAndFlush(): void {
-    if (!this.queueHold || !this.queueRearmActive) return;
-    this.releaseQueueHold();
-    this.maybeFlushQueue();
   }
 
   /** When the run finishes, run the next queued command, then the next prompt. */
@@ -2871,15 +2893,21 @@ export class MidasApp {
     if (this.queueHold) return;
     if (this.sending || this.queueBusy) return;
     if (this.options.controller.transcript.phase !== "idle") return;
+    const next = this.queue[0];
+    if (next === undefined) {
+      this.queueGrant = false;
+      this.queueDispatchedAt = -1;
+      return;
+    }
+    // Every automatic dequeue needs a fresh completion proof: a bare idle, a
+    // local command's `finally`, or a replay of an older turn proves nothing.
+    // The grant is spent on this one item, so the next one needs new proof.
+    if (!this.queueCompletionProven()) return;
+    this.queueGrant = false;
     // Only one follow-up per completed run: wait until the previously dispatched
     // prompt has actually landed as a user message, so a transient idle (before
     // the server reports "busy") can't drain the whole queue at once.
     if (this.queueDispatchedAt >= 0 && this.userMessageCount() <= this.queueDispatchedAt) return;
-    const next = this.queue[0];
-    if (next === undefined) {
-      this.queueDispatchedAt = -1;
-      return;
-    }
     // A queued file prompt whose frozen payload is gone must never be re-read
     // from disk at flush time. Pause it in place until the user reattaches.
     const unresolved = this.queuedFilesNeedingReattach(next);
@@ -2894,6 +2922,8 @@ export class MidasApp {
     const shell = this.shellCommand(next.text);
     if (shell) {
       // A queued `!` command runs when the turn settles, then the queue resumes.
+      // Its own `finally` is local work, not agent completion, so the next item
+      // still needs fresh proof.
       this.queueBusy = true;
       this.queueDispatchedAt = -1;
       void this.runShellCommand(shell.command, shell.exclude)
@@ -2907,7 +2937,8 @@ export class MidasApp {
     if (next.text.startsWith("/")) {
       // A queued command runs to completion before anything after it, then the
       // queue resumes. The guard keeps a notice emitted mid-command from
-      // dispatching the next item early.
+      // dispatching the next item early. A local command is not agent
+      // completion, so it cannot flush the rest on its own.
       this.queueBusy = true;
       this.queueDispatchedAt = -1;
       void this.runSlashCommand(next.text)
@@ -3315,10 +3346,12 @@ export class MidasApp {
         this.steerTyped(raw);
         return { consume: true };
       }
-      // An empty cmd+enter explicitly dequeues only the top follow-up. While a
-      // run is active it steers into it; after a cancellation (idle but held) it
-      // starts a fresh turn, which re-arms delivery for the rest once it settles.
-      if (this.queue.length > 0 && (this.isRunActive() || this.queueHold)) {
+      // An empty cmd+enter explicitly dequeues only the top follow-up whenever
+      // the queue is nonempty, including idle after a cancellation/reconnect
+      // whose completion ownership is unknown. While a run is active it steers
+      // into it; otherwise it starts a fresh turn, which re-arms delivery for
+      // the rest once that turn genuinely completes.
+      if (this.queue.length > 0) {
         this.consumeQueuedExplicitly();
         return { consume: true };
       }
@@ -3415,6 +3448,11 @@ export class MidasApp {
   private consumeQueuedExplicitly(): void {
     const item = this.queue[0];
     if (!item) return;
+    // The explicit key owns this dequeue: cancel any armed automatic flush and
+    // spend any pending completion grant, so one key can never trigger a second
+    // automatic dequeue behind it.
+    this.cancelQueueFlush();
+    this.discardQueueGrant();
     if (this.isRunActive()) {
       this.steerQueued();
       return;
@@ -3429,21 +3467,21 @@ export class MidasApp {
     this.queue.shift();
     this.persistSessionState();
     this.tui.requestRender();
-    this.armQueueDelivery();
     if (shell) {
-      // A `!` command is discrete: run it, then let the queue resume.
+      // A `!` command is a discrete local job: only it runs. Its success,
+      // failure or `finally` must never release a stopped queue, so the rest
+      // wait for genuine agent completion or another explicit empty cmd+enter.
       this.queueBusy = true;
       void this.runShellCommand(shell.command, shell.exclude)
         .catch(() => undefined)
         .finally(() => {
           this.queueBusy = false;
-          this.releaseQueueHoldAndFlush();
         });
       return;
     }
     if (item.text.startsWith("/")) {
-      // A command runs to completion before anything after it, exactly as the
-      // automatic flush does; its own idle is what releases the hold.
+      // A local command runs to completion, but its lifecycle is not agent
+      // completion and cannot release the queue either.
       this.queueBusy = true;
       void this.runSlashCommand(item.text)
         .catch(() => undefined)
@@ -3452,6 +3490,8 @@ export class MidasApp {
         });
       return;
     }
+    // Fresh model work re-arms a held queue (via sendPrompt) so its genuine
+    // completion can release the rest.
     void this.sendPrompt(this.deliveryText(item), item.attachments);
   }
 
@@ -3862,6 +3902,7 @@ export class MidasApp {
       // above with its own queue.
       this.queueHold = false;
       this.queueRearmActive = false;
+      this.queueGrant = false;
       this.restoreDraft(this.options.controller.id);
       this.transcriptView.reset();
       this.resetTitle();

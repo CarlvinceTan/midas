@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { Event, Message, OpencodeClient, Part, Permission, Session } from "@opencode-ai/sdk";
 import type { OpencodeClient as OpencodeV2Client } from "@opencode-ai/sdk/v2";
 import { Transcript, isNetworkError, type QuestionView, type SessionPhase } from "../state/transcript.ts";
@@ -129,6 +130,35 @@ export function eventSessionId(event: Event): string | undefined {
   return props.sessionID ?? props.part?.sessionID ?? props.info?.sessionID ?? (event.type.startsWith("session.") ? props.info?.id : undefined);
 }
 
+const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+let lastMessageIdTimestamp = 0;
+let messageIdCounter = 0;
+
+/**
+ * Mint a message id using opencode's own convention (its `Identifier.ascending`):
+ * `<prefix>_<6-byte timestamp hex><14 base62 random>`. Supplying the id in the
+ * prompt/command body makes the turn Midas started correlatable exactly, instead
+ * of binding whatever user-message event happens to arrive first.
+ */
+export function newMessageId(timestamp = Date.now()): string {
+  if (timestamp !== lastMessageIdTimestamp) {
+    lastMessageIdTimestamp = timestamp;
+    messageIdCounter = 0;
+  }
+  messageIdCounter += 1;
+  const now = BigInt(timestamp) * BigInt(0x1000) + BigInt(messageIdCounter);
+  let time = "";
+  for (let i = 0; i < 6; i++) {
+    const byte = Number((now >> BigInt(40 - 8 * i)) & BigInt(0xff));
+    time += byte.toString(16).padStart(2, "0");
+  }
+  const bytes = randomBytes(14);
+  let suffix = "";
+  for (let i = 0; i < 14; i++) suffix += BASE62[bytes[i]! % 62];
+  return `msg_${time}${suffix}`;
+}
+
 /**
  * Binds one opencode session to a Transcript: subscribes to the global event
  * stream, filters by session id, and exposes prompt/abort/permission action.
@@ -161,12 +191,21 @@ export class SessionController {
   private submissionRevision = 0;
   /**
    * The newest explicit fresh turn whose genuine completion the queue may trust.
-   * It is fail-closed: `messageID` is bound from the backend's own user-message
-   * event and completion is only proven by a terminal assistant message that
-   * names it as parent. Anything else (unknown owner, stale history, abort,
-   * error, tool step, reconnect) leaves it unproven so the queue stays held.
+   * `messageID` is the exact id Midas supplied in the prompt/command body, stored
+   * before the request so no late/replayed event can bind a different parent.
+   * Completion is fail-closed: only the exact user echo plus a terminal assistant
+   * message naming that id as parent, observed with the session idle, proves it.
+   * Anything else (old/history user updates, wrong owner, abort, error, tool
+   * step, reconnect) leaves it unproven so the queue stays held.
    */
-  private explicitTurn: { messageID?: string; terminal: boolean; failed: boolean } | undefined;
+  private explicitTurn: {
+    messageID: string;
+    sessionId: string;
+    /** True once the exact supplied user message id was observed. */
+    admitted: boolean;
+    terminal: boolean;
+    failed: boolean;
+  } | undefined;
 
   constructor(options: SessionControllerOptions) {
     this.client = options.client;
@@ -184,6 +223,8 @@ export class SessionController {
   }
 
   async start(): Promise<void> {
+    // A new session invalidates any prior completion ownership or pending abort.
+    this.lifecycleRevision += 1;
     this.explicitTurn = undefined;
     const session = (await this.client.session.create({
       body: {},
@@ -198,7 +239,9 @@ export class SessionController {
 
   async resume(sessionId: string): Promise<void> {
     // A resumed/reconnected session has no in-memory run ownership: the
-    // reloaded history must never be mistaken for a live completion.
+    // reloaded history must never be mistaken for a live completion, and any
+    // in-flight abort for the previous session must not idle this one.
+    this.lifecycleRevision += 1;
     this.explicitTurn = undefined;
     this.sessionId = sessionId;
     await this.subscribeEvents();
@@ -459,7 +502,8 @@ export class SessionController {
   }
 
   async prompt(text: string, attachments: PromptAttachment[] = []): Promise<void> {
-    if (!this.sessionId) throw new Error("No active session");
+    const sessionId = this.sessionId;
+    if (!sessionId) throw new Error("No active session");
     this.submissionRevision += 1;
     // Decide the delivery from the phase as it was *before* we mark the session
     // busy, so a steer is not mistaken for the fresh turn we start right after.
@@ -467,13 +511,16 @@ export class SessionController {
     this.transcript.setPhase("busy");
     if (wasBusy && (await this.steer(text, attachments))) return;
     // This v1 submission starts (or falls back to) a fresh turn whose genuine
-    // completion may release a held queue. Register the correlation before the
-    // request so the very first backend user message binds to it.
-    this.explicitTurn = { terminal: false, failed: false };
+    // completion may release a held queue. Supply the exact message id and
+    // register it *before* the request, so a late/replayed user-message event
+    // can never bind an older parent to this turn.
+    const messageID = newMessageId();
+    this.explicitTurn = { messageID, sessionId, admitted: false, terminal: false, failed: false };
     // A steer needs opencode's v2 endpoint (1.18.30+). If the v2 client is
     // absent or the route is unreachable, fall through to the v1 path so the
     // prompt still lands instead of being dropped.
     const body = {
+      messageID,
       parts: [
         ...(text ? [{ type: "text" as const, text }] : []),
         ...attachments.map((file) => ({ type: "file" as const, mime: file.mime, filename: file.filename, url: file.url })),
@@ -483,7 +530,7 @@ export class SessionController {
       ...(this.variant ? { variant: this.variant } : {}),
     };
     await this.client.session.promptAsync({
-      path: { id: this.sessionId },
+      path: { id: sessionId },
       query: { directory: this.cwd },
       body,
     });
@@ -530,33 +577,41 @@ export class SessionController {
   }
 
   async abort(): Promise<void> {
-    if (!this.sessionId) return;
+    const sessionId = this.sessionId;
+    if (!sessionId) return;
     // The cancelled turn can never prove a genuine completion again.
     this.explicitTurn = undefined;
     const submission = this.submissionRevision;
-    await this.client.session.abort({ path: { id: this.sessionId }, query: { directory: this.cwd } });
-    // A newer prompt may have started while the abort was in flight (or this
-    // ack may arrive after the user's fresh work). Only clear the phase when
-    // nothing newer has been submitted, so a late acknowledgement cannot reset
-    // a live turn to idle and leak a held queue.
-    if (this.submissionRevision === submission) this.transcript.setPhase("idle");
+    const lifecycle = this.lifecycleRevision;
+    await this.client.session.abort({ path: { id: sessionId }, query: { directory: this.cwd } });
+    // A newer prompt may have started while the abort was in flight, a newer
+    // lifecycle event may have claimed the phase, or the user may have switched
+    // to another session entirely. Only clear the phase when the ack belongs to
+    // this still-current, unchanged session, so a late acknowledgement for
+    // session A can never idle newly resumed session B.
+    if (this.sessionId !== sessionId) return;
+    if (this.submissionRevision !== submission || this.lifecycleRevision !== lifecycle) return;
+    this.transcript.setPhase("idle");
   }
 
   /**
-   * Record backend message identity/terminal evidence for the tracked explicit
-   * turn. The first backend user message after registration binds its id; only
-   * a completed, error-free, non-tool-step assistant message whose parent is
-   * that exact id proves completion. Aborted/errored messages for the parent
-   * fail the turn closed so no later stale event can match it.
+   * Record backend message evidence for the tracked explicit turn. Only the
+   * exact user id Midas supplied marks the turn admitted, and only an
+   * error-free, completed, non-tool-step assistant message naming that id as
+   * parent proves it terminal. Events from any other session, parent or user id
+   * (older history, summary replays, delayed duplicates) are ignored, so
+   * first-event arrival is never treated as identity. An abort/error for the
+   * parent fails the turn closed so no later stale event can match it.
    */
   private trackExplicitTurn(info: Message): void {
     const turn = this.explicitTurn;
     if (!turn || turn.failed) return;
+    if (info.sessionID !== turn.sessionId) return;
     if (info.role === "user") {
-      if (turn.messageID === undefined) turn.messageID = info.id;
+      if (info.id === turn.messageID) turn.admitted = true;
       return;
     }
-    if (turn.messageID === undefined || info.parentID !== turn.messageID) return;
+    if (info.parentID !== turn.messageID) return;
     if (info.error) {
       turn.failed = true;
       return;
@@ -570,14 +625,15 @@ export class SessionController {
 
   /**
    * Consume a proven completion of the newest explicit fresh turn. Returns true
-   * exactly once, and only when a terminal assistant message for that turn's own
-   * user message was observed AND the session is idle. Old-parent history,
-   * aborted/error/tool-step messages, unknown owners, reconnect snapshots and
-   * bare stale idle events all return false, so the queue stays held.
+   * exactly once, and only when the exact expected user message was observed AND
+   * a terminal assistant message names it as parent AND the session is idle.
+   * Old/other-parent history, aborted/error/tool-step messages, unknown owners,
+   * reconnect snapshots and bare stale idle events all return false, so the
+   * queue stays held.
    */
   consumeQueueCompletion(): boolean {
     const turn = this.explicitTurn;
-    if (!turn || turn.failed || !turn.terminal) return false;
+    if (!turn || turn.failed || !turn.admitted || !turn.terminal) return false;
     if (this.transcript.phase !== "idle") return false;
     this.explicitTurn = undefined;
     return true;
@@ -985,26 +1041,31 @@ export class SessionController {
 
   /** Run a slash command as a new prompt in the session. */
   async runCommand(name: string, args: string): Promise<void> {
-    if (!this.sessionId) throw new Error("No active session");
+    const sessionId = this.sessionId;
+    if (!sessionId) throw new Error("No active session");
     this.submissionRevision += 1;
     // A command starts a turn like a prompt. Only an idle session owns the
     // busy phase we set here: an already-busy or retrying session has a real
     // turn in flight, so leave its phase (and reconnect flag) alone.
     const wasIdle = this.transcript.phase === "idle";
     const lifecycle = this.lifecycleRevision;
+    let messageID: string | undefined;
     if (wasIdle) {
       this.transcript.setPhase("busy");
-      // An idle command is a fresh explicit turn: track its completion so a
-      // held queue can be released only by genuine terminal evidence.
-      this.explicitTurn = { terminal: false, failed: false };
+      // An idle command is a fresh explicit turn: supply and register the exact
+      // identity before dispatching, so a held queue can be released only by a
+      // terminal message naming this command's own user message.
+      messageID = newMessageId();
+      this.explicitTurn = { messageID, sessionId, admitted: false, terminal: false, failed: false };
     }
     try {
       await this.client.session.command({
-        path: { id: this.sessionId },
+        path: { id: sessionId },
         query: { directory: this.cwd },
         body: {
           command: name,
           arguments: args,
+          ...(messageID ? { messageID } : {}),
           ...(this.model ? { model: `${this.model.providerID}/${this.model.modelID}` } : {}),
           ...(this.agent ? { agent: this.agent } : {}),
         },

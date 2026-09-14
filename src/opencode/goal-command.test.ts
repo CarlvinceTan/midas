@@ -50,7 +50,20 @@ after(() => {
 interface CommandRequest {
   path: { id: string };
   query: { directory: string };
-  body: { command: string; arguments: string; model?: string; agent?: string };
+  body: { command: string; arguments: string; messageID?: string; model?: string; agent?: string };
+}
+
+/**
+ * The exact id Midas supplies in the command body: opencode's ascending message
+ * id shape (`msg_` + 12 hex timestamp chars + 14 base62 random chars).
+ */
+const MESSAGE_ID_PATTERN = /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
+
+/** Assert a request carries a supported exact id, then return the body without it. */
+function bodyWithoutId(request: CommandRequest): { command: string; arguments: string; model?: string; agent?: string } {
+  assert.match(String(request.body.messageID), MESSAGE_ID_PATTERN, "the command supplies a supported exact message id");
+  const { messageID: _id, ...rest } = request.body;
+  return rest;
 }
 
 function sessionRecord(id: string, title = "title") {
@@ -182,10 +195,15 @@ test("runCommand sends goal, pause_goal and resume_goal with agent, model, args 
     { name: "pause_goal", args: "" },
     { name: "resume_goal", args: "" },
   ];
-  for (const entry of cases) await controller.runCommand(entry.name, entry.args);
+  for (const entry of cases) {
+    // Each command is submitted as its own fresh idle command, exactly as the
+    // UI does when the previous one has settled.
+    controller.transcript.setPhase("idle");
+    await controller.runCommand(entry.name, entry.args);
+  }
 
   assert.deepEqual(
-    requests,
+    requests.map((request) => ({ path: request.path, query: request.query, body: bodyWithoutId(request) })),
     cases.map((entry) => ({
       path: { id: "s1" },
       query: { directory: "/work" },
@@ -197,6 +215,8 @@ test("runCommand sends goal, pause_goal and resume_goal with agent, model, args 
       },
     })),
   );
+  const ids = requests.map((request) => request.body.messageID);
+  assert.equal(new Set(ids).size, ids.length, "every submission gets its own exact identity");
 });
 
 test("runCommand preserves the selected main, orchestrator and plan agent", TIMEOUT, async () => {
@@ -207,7 +227,7 @@ test("runCommand preserves the selected main, orchestrator and plan agent", TIME
     controller.setAgent(agent);
     await controller.runCommand("goal", "status");
     assert.equal(requests[0]?.body?.agent, agent, `${agent}: selected agent is sent`);
-    assert.deepEqual(requests[0]?.body, { command: "goal", arguments: "status", agent });
+    assert.deepEqual(bodyWithoutId(requests[0]!), { command: "goal", arguments: "status", agent });
   }
 });
 
@@ -217,7 +237,7 @@ test("runCommand omits model when none is selected but still sends the agent", T
   await controller.resume("s1");
   controller.setAgent("plan");
   await controller.runCommand("goal", "status");
-  assert.deepEqual(requests[0]?.body, { command: "goal", arguments: "status", agent: "plan" });
+  assert.deepEqual(bodyWithoutId(requests[0]!), { command: "goal", arguments: "status", agent: "plan" });
 });
 
 test("runCommand without an active session throws before dispatching", TIMEOUT, async () => {
@@ -330,7 +350,7 @@ test("reconnect routes commands to the new client with the same session identity
   await controller.runCommand("resume_goal", "");
 
   assert.equal(first.requests.length, 0, "the old client receives nothing");
-  assert.deepEqual(second.requests, [
+  assert.deepEqual(second.requests.map((request) => ({ path: request.path, query: request.query, body: bodyWithoutId(request) })), [
     {
       path: { id: "s3" },
       query: { directory: "/x" },

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SessionController, shouldSteer, steerPrompt } from "./session.ts";
+import { SessionController, newMessageId, shouldSteer, steerPrompt } from "./session.ts";
 
 function session(id: string, title: string) {
   return { id, projectID: "p", directory: "/x", title, version: "1", time: { created: 0, updated: 0 } };
@@ -79,13 +79,13 @@ test("resume falls back to an empty title when the session lookup fails", async 
 
 /** Records v1 `promptAsync` and v2 `v2.session.prompt` calls for prompt tests. */
 function promptFake(admit: "ok" | "undefined" | "throw" = "ok") {
-  const v1: Array<{ body?: Record<string, unknown> }> = [];
+  const v1: Array<{ path?: Record<string, unknown>; query?: Record<string, unknown>; body?: Record<string, unknown> }> = [];
   const v2: Array<Record<string, unknown>> = [];
   const client = {
     session: {
       get: async () => session("s1", "t"),
       messages: async () => [],
-      promptAsync: async (options: { body?: Record<string, unknown> }) => {
+      promptAsync: async (options: { path?: Record<string, unknown>; query?: Record<string, unknown>; body?: Record<string, unknown> }) => {
         v1.push(options);
       },
     },
@@ -106,6 +106,16 @@ function promptFake(admit: "ok" | "undefined" | "throw" = "ok") {
   return { client, clientV2, v1, v2 };
 }
 
+test("generated message ids follow opencode's ascending message convention", () => {
+  const ids = new Set<string>();
+  for (let i = 0; i < 200; i++) {
+    const id = newMessageId();
+    assert.match(id, MESSAGE_ID_PATTERN, "the id is `msg_` + 12 hex + 14 base62");
+    ids.add(id);
+  }
+  assert.equal(ids.size, 200, "ids stay unique across rapid generation");
+});
+
 test("shouldSteer treats only an idle session as a fresh turn", () => {
   assert.equal(shouldSteer("idle"), false);
   assert.equal(shouldSteer("busy"), true);
@@ -124,23 +134,40 @@ function eventClient() {
       yield next;
     }
   })();
+  const promptBodies: Array<Record<string, unknown>> = [];
+  const commandBodies: Array<Record<string, unknown>> = [];
   return {
     client: {
       session: {
         get: async () => session("s1", "t"),
         messages: async () => [],
-        promptAsync: async () => {},
-        command: async () => {},
+        promptAsync: async (options: { body?: Record<string, unknown> }) => {
+          promptBodies.push(options.body ?? {});
+        },
+        command: async (options: { body?: Record<string, unknown> }) => {
+          commandBodies.push(options.body ?? {});
+        },
         abort: async () => {},
       },
       event: { subscribe: async () => ({ stream }) },
     },
+    promptBodies,
+    commandBodies,
     send(event: unknown) {
       queue.push(event);
       waiters.shift()?.();
     },
   };
 }
+
+/** The exact message id Midas supplied for the last fresh prompt. */
+function lastPromptId(promptBodies: Array<Record<string, unknown>>): string {
+  const id = promptBodies.at(-1)?.messageID;
+  assert.equal(typeof id, "string", "a fresh prompt supplies an exact message id");
+  return id as string;
+}
+
+const MESSAGE_ID_PATTERN = /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 
 const settle = async (): Promise<void> => {
   for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -227,18 +254,17 @@ test("an idle prompt keeps the v1 path with model, thinking variant and agent", 
   controller.setAgent("plan");
   await controller.prompt("hello");
   assert.equal(v2.length, 0);
-  assert.deepEqual(v1, [
-    {
-      path: { id: "s1" },
-      query: { directory: "/x" },
-      body: {
-        parts: [{ type: "text", text: "hello" }],
-        model: { providerID: "anthropic", modelID: "claude-sonnet" },
-        variant: "high",
-        agent: "plan",
-      },
-    },
-  ]);
+  const body = v1[0]?.body ?? {};
+  assert.match(String(body.messageID), MESSAGE_ID_PATTERN, "a supported exact message id is supplied");
+  const { messageID: _id, ...rest } = body;
+  assert.deepEqual(rest, {
+    parts: [{ type: "text", text: "hello" }],
+    model: { providerID: "anthropic", modelID: "claude-sonnet" },
+    variant: "high",
+    agent: "plan",
+  });
+  assert.deepEqual(v1[0]?.path, { id: "s1" });
+  assert.deepEqual(v1[0]?.query, { directory: "/x" });
 });
 
 test("clearing the thinking variant omits it from a fresh prompt", async () => {
@@ -338,7 +364,7 @@ test("a failed question reply or reject leaves the prompt pending", async () => 
 
 // --- explicit-turn completion correlation ----------------------------------
 
-const userInfo = (id: string) => ({ id, sessionID: "s1", role: "user", agent: "main", time: { created: 0 } });
+const userInfo = (id: string, sessionID = "s1") => ({ id, sessionID, role: "user", agent: "main", time: { created: 0 } });
 
 const assistantInfo = (id: string, parentID: string, finish?: string, aborted = false) => ({
   id,
@@ -359,11 +385,12 @@ const messageEvent = (info: unknown) => ({ type: "message.updated", properties: 
 const idleEvent = () => ({ type: "session.idle", properties: { sessionID: "s1" } });
 
 test("consumeQueueCompletion proves only a terminal message for the explicit turn's own parent", async () => {
-  const { client, send } = eventClient();
+  const { client, send, promptBodies } = eventClient();
   const controller = new SessionController({ client: client as never, cwd: "/x" });
   await controller.resume("s1");
   await controller.prompt("go");
   assert.equal(controller.transcript.phase, "busy");
+  const expected = lastPromptId(promptBodies);
 
   // A terminal for another parent (and a bare idle) proves nothing.
   send(messageEvent(assistantInfo("a-other", "u-other", "stop")));
@@ -372,26 +399,27 @@ test("consumeQueueCompletion proves only a terminal message for the explicit tur
   await settle();
   assert.equal(controller.consumeQueueCompletion(), false);
 
-  // Bind the explicit turn's own user message; a tool step is not terminal.
-  send(messageEvent(userInfo("u1")));
-  send(messageEvent(assistantInfo("a-step", "u1", "tool-calls")));
+  // The exact supplied user echo admits the turn; a tool step is not terminal.
+  send(messageEvent(userInfo(expected)));
+  send(messageEvent(assistantInfo("a-step", expected, "tool-calls")));
   await settle();
   assert.equal(controller.consumeQueueCompletion(), false);
 
   // The matching terminal step completes, and is consumed exactly once.
-  send(messageEvent(assistantInfo("a-final", "u1", "stop")));
+  send(messageEvent(assistantInfo("a-final", expected, "stop")));
   await settle();
   assert.equal(controller.consumeQueueCompletion(), true);
   assert.equal(controller.consumeQueueCompletion(), false, "a completion is consumed once");
 });
 
 test("consumeQueueCompletion requires the session to be idle", async () => {
-  const { client, send } = eventClient();
+  const { client, send, promptBodies } = eventClient();
   const controller = new SessionController({ client: client as never, cwd: "/x" });
   await controller.resume("s1");
   await controller.prompt("go");
-  send(messageEvent(userInfo("u1")));
-  send(messageEvent(assistantInfo("a-final", "u1", "stop")));
+  const expected = lastPromptId(promptBodies);
+  send(messageEvent(userInfo(expected)));
+  send(messageEvent(assistantInfo("a-final", expected, "stop")));
   await settle();
   assert.equal(controller.transcript.phase, "busy");
   assert.equal(controller.consumeQueueCompletion(), false, "a terminal while busy is not a completion yet");
@@ -402,16 +430,145 @@ test("consumeQueueCompletion requires the session to be idle", async () => {
 });
 
 test("an aborted assistant message fails the explicit turn closed", async () => {
-  const { client, send } = eventClient();
+  const { client, send, promptBodies } = eventClient();
   const controller = new SessionController({ client: client as never, cwd: "/x" });
   await controller.resume("s1");
   await controller.prompt("go");
-  send(messageEvent(userInfo("u1")));
-  send(messageEvent(assistantInfo("a-abort", "u1", undefined, true)));
-  send(messageEvent(assistantInfo("a-final", "u1", "stop")));
+  const expected = lastPromptId(promptBodies);
+  send(messageEvent(userInfo(expected)));
+  send(messageEvent(assistantInfo("a-abort", expected, undefined, true)));
+  send(messageEvent(assistantInfo("a-final", expected, "stop")));
   send(idleEvent());
   await settle();
   assert.equal(controller.consumeQueueCompletion(), false, "an aborted turn can never prove completion");
+});
+
+test("a late or replayed old-user message never binds the fresh turn's identity", async () => {
+  const { client, send, promptBodies } = eventClient();
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  await controller.prompt("go");
+  const expected = lastPromptId(promptBodies);
+  controller.transcript.setPhase("idle");
+
+  // An already-seen user update and a previously unseen delayed one both land
+  // before the expected user echo. Neither may bind as the turn's identity, and
+  // their already-completed parents must not release the queue.
+  send(messageEvent(userInfo("u-old-seen")));
+  send(messageEvent(userInfo("u-old-seen")));
+  send(messageEvent(userInfo("u-old-delayed")));
+  send(messageEvent(assistantInfo("a-old", "u-old-seen", "stop")));
+  send(messageEvent(assistantInfo("a-delayed", "u-old-delayed", "stop")));
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), false, "old parents never release the queue");
+
+  // Only the exact supplied id proves the current turn.
+  send(messageEvent(userInfo(expected)));
+  send(messageEvent(assistantInfo("a-final", expected, "stop")));
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), true);
+});
+
+test("a stale duplicate completion for an earlier submission never proves the newest", async () => {
+  const { client, send, promptBodies } = eventClient();
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  await controller.prompt("same text");
+  const first = lastPromptId(promptBodies);
+  controller.transcript.setPhase("idle");
+  await controller.prompt("same text");
+  const second = lastPromptId(promptBodies);
+  assert.notEqual(first, second, "repeated text still gets a fresh exact identity");
+  assert.match(second, MESSAGE_ID_PATTERN);
+  controller.transcript.setPhase("idle");
+
+  // A duplicate/replayed terminal for the OLDER submission proves nothing now.
+  send(messageEvent(userInfo(first)));
+  send(messageEvent(assistantInfo("a-first", first, "stop")));
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), false, "the stale submission cannot prove the newest turn");
+
+  // Only the newest submission's own parent does.
+  send(messageEvent(userInfo(second)));
+  send(messageEvent(assistantInfo("a-second", second, "stop")));
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), true);
+});
+
+test("completion evidence from another session never proves the turn", async () => {
+  const { client, send, promptBodies } = eventClient();
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  await controller.prompt("go");
+  const expected = lastPromptId(promptBodies);
+  controller.transcript.setPhase("idle");
+
+  send(messageEvent(userInfo(expected, "other-session")));
+  send(messageEvent({ ...assistantInfo("a-other", expected, "stop"), sessionID: "other-session" }));
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), false, "wrong-session evidence is ignored");
+
+  send(messageEvent(userInfo(expected)));
+  send(messageEvent(assistantInfo("a-final", expected, "stop")));
+  await settle();
+  assert.equal(controller.consumeQueueCompletion(), true);
+});
+
+test("an abort acknowledgement for a previous session never idles a newly resumed one", async () => {
+  let releaseAbort!: () => void;
+  const client = {
+    session: {
+      get: async (options: { path: { id: string } }) => session(options.path.id, "t"),
+      messages: async () => [],
+      promptAsync: async () => {},
+      abort: () =>
+        new Promise<void>((resolve) => {
+          releaseAbort = resolve;
+        }),
+    },
+    event: { subscribe: async () => ({ stream: (async function* () {})() }) },
+  };
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  controller.transcript.setPhase("busy");
+
+  // The abort is dispatched for s1 but its acknowledgement is still pending.
+  const aborting = controller.abort();
+  // The user switches to (and starts a live run on) s2 with no new prompt on it.
+  await controller.resume("s2");
+  controller.transcript.setPhase("busy");
+  assert.equal(controller.id, "s2");
+
+  releaseAbort();
+  await aborting;
+  assert.equal(controller.transcript.phase, "busy", "the s1 acknowledgement did not idle s2");
+});
+
+test("a reconnect invalidates an in-flight abort acknowledgement", async () => {
+  let releaseAbort!: () => void;
+  let current = "s1";
+  const client = {
+    session: {
+      get: async () => session(current, "t"),
+      messages: async () => [],
+      promptAsync: async () => {},
+      abort: () =>
+        new Promise<void>((resolve) => {
+          releaseAbort = resolve;
+        }),
+    },
+    event: { subscribe: async () => ({ stream: (async function* () {})() }) },
+  };
+  const controller = new SessionController({ client: client as never, cwd: "/x" });
+  await controller.resume("s1");
+  controller.transcript.setPhase("busy");
+  const aborting = controller.abort();
+  // Reconnecting the same session reloads history: the run is no longer owned.
+  await controller.reconnect({ client: client as never });
+  controller.transcript.setPhase("busy");
+  releaseAbort();
+  await aborting;
+  assert.equal(controller.transcript.phase, "busy", "the pre-reconnect ack did not idle the reloaded session");
 });
 
 test("a late abort acknowledgement does not reset a newer prompt to idle", async () => {

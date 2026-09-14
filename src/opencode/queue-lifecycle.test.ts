@@ -279,11 +279,19 @@ function promptTexts(sdk: FakeSdk): string[] {
   return sdk.promptBodies.map(promptText);
 }
 
+/** The exact message id Midas supplied for its most recent fresh prompt. */
+function lastPromptId(sdk: FakeSdk): string {
+  const id = sdk.promptBodies.at(-1)?.messageID;
+  assert.equal(typeof id, "string", "the fresh prompt supplies an exact message id");
+  return id as string;
+}
+
 /**
  * Hold a busy session with one queued follow-up, then submit explicit fresh work
- * and leave the session busy on that fresh run.
+ * and leave the session busy on that fresh run. Returns the exact message id
+ * Midas supplied for that fresh turn, which genuine completion must name.
  */
-async function holdAndRearm(h: Harness): Promise<void> {
+async function holdAndRearm(h: Harness): Promise<string> {
   h.controller.transcript.setPhase("busy");
   await h.internals.handleSubmit("A");
   assert.equal(h.internals.queue.length, 1);
@@ -294,6 +302,7 @@ async function holdAndRearm(h: Harness): Promise<void> {
   assert.equal(h.internals.queueRearmActive, true, "explicit work re-arms delivery");
   assert.equal(h.controller.transcript.phase, "busy", "the fresh run is busy");
   assert.deepEqual(promptTexts(h.sdk), ["fresh work"]);
+  return lastPromptId(h.sdk);
 }
 
 function syncIdle(h: Harness): void {
@@ -322,6 +331,7 @@ test("an old cancelled idle after fresh busy cannot release, and a matching term
   await h.internals.handleSubmit("fresh work");
   assert.equal(h.controller.transcript.phase, "busy");
   assert.deepEqual(promptTexts(h.sdk), ["fresh work"]);
+  const expected = lastPromptId(h.sdk);
 
   // The OLD cancelled run's delayed idle lands *after* the fresh busy was seen.
   h.sdk.send(sessionIdle());
@@ -332,16 +342,16 @@ test("an old cancelled idle after fresh busy cannot release, and a matching term
   assert.deepEqual(h.internals.queue.map((item) => item.text), ["A", "B"], "the queue stayed private");
   assert.equal(h.internals.queueHold, true, "the hold survived the stale idle");
 
-  // The fresh run's own user message binds its identity, and a tool step is not
+  // The fresh run's exact user echo admits its identity, and a tool step is not
   // terminal; only the matching terminal assistant message proves completion.
-  h.sdk.send(messageUpdated(userMessage("u-fresh")));
-  h.sdk.send(messageUpdated(assistantMessage("a-step", "u-fresh", { finish: "tool-calls" })));
+  h.sdk.send(messageUpdated(userMessage(expected)));
+  h.sdk.send(messageUpdated(assistantMessage("a-step", expected, { finish: "tool-calls" })));
   await settle();
   syncIdle(h);
   await settleFlush();
   assert.deepEqual(promptTexts(h.sdk), ["fresh work"], "a tool step alone proved nothing");
 
-  h.sdk.send(messageUpdated(assistantMessage("a-final", "u-fresh", { finish: "stop" })));
+  h.sdk.send(messageUpdated(assistantMessage("a-final", expected, { finish: "stop" })));
   await settle();
   syncIdle(h);
   await settleFlush();
@@ -350,13 +360,70 @@ test("an old cancelled idle after fresh busy cannot release, and a matching term
   assert.equal(h.internals.queueHold, false, "the proven completion released the hold");
 
   // Duplicate completion/idle events must not drain the next item.
-  h.sdk.send(messageUpdated(assistantMessage("a-final", "u-fresh", { finish: "stop" })));
+  h.sdk.send(messageUpdated(assistantMessage("a-final", expected, { finish: "stop" })));
   h.sdk.send(sessionIdle());
   await settle();
   syncIdle(h);
   await settleFlush();
   assert.deepEqual(promptTexts(h.sdk), ["fresh work", "A"], "duplicates drained nothing more");
   assert.deepEqual(h.internals.queue.map((item) => item.text), ["B"]);
+});
+
+// --- completion grants gate every automatic dequeue ------------------------
+
+test("a duplicate old idle after a fresh echo cannot drain the queue; only exact proof does", async (t) => {
+  const h = makeHarness();
+  t.after(() => h.close());
+  await h.controller.resume(SESSION);
+
+  // turn0 is the tracked explicit turn; A and B queue behind it.
+  await h.controller.prompt("turn0");
+  await h.internals.handleSubmit("A");
+  await h.internals.handleSubmit("B");
+  assert.deepEqual(h.internals.queue.map((item) => item.text), ["A", "B"]);
+  const turn0 = lastPromptId(h.sdk);
+
+  // turn0 genuinely completes: exact user echo + terminal + idle.
+  h.sdk.send(messageUpdated(userMessage(turn0)));
+  h.sdk.send(messageUpdated(assistantMessage("a-turn0", turn0, { finish: "stop" })));
+  h.sdk.send(sessionIdle());
+  await settle();
+  syncIdle(h);
+  await settleFlush();
+  assert.deepEqual(promptTexts(h.sdk), ["turn0", "A"], "a genuine completion dispatches exactly one item");
+  assert.deepEqual(h.internals.queue.map((item) => item.text), ["B"]);
+  const aId = lastPromptId(h.sdk);
+
+  // A's own backend user echo lands while A is still running.
+  h.sdk.send(messageUpdated(userMessage(aId)));
+  await settle();
+
+  // A duplicate/replayed turn0 terminal and idle arrive *after* A's echo. The
+  // user-message count proves A was admitted, not completed, so B must stay.
+  h.sdk.send(messageUpdated(assistantMessage("a-turn0-dup", turn0, { finish: "stop" })));
+  h.sdk.send(sessionIdle());
+  await settle();
+  syncIdle(h);
+  await settleFlush();
+  assert.deepEqual(promptTexts(h.sdk), ["turn0", "A"], "the stale turn0 idle could not dispatch B");
+  assert.deepEqual(h.internals.queue.map((item) => item.text), ["B"], "B waits for its own exact proof");
+
+  // Only A's exact terminal + idle dispatches B, exactly once. Duplicates then
+  // drain nothing more.
+  h.sdk.send(messageUpdated(assistantMessage("a-a", aId, { finish: "stop" })));
+  h.sdk.send(sessionIdle());
+  await settle();
+  syncIdle(h);
+  await settleFlush();
+  assert.deepEqual(promptTexts(h.sdk), ["turn0", "A", "B"], "A's exact completion dispatches B once");
+
+  h.sdk.send(messageUpdated(assistantMessage("a-a", aId, { finish: "stop" })));
+  h.sdk.send(sessionIdle());
+  await settle();
+  syncIdle(h);
+  await settleFlush();
+  assert.deepEqual(promptTexts(h.sdk), ["turn0", "A", "B"], "the duplicate drained nothing more");
+  assert.deepEqual(h.internals.queue, []);
 });
 
 // --- terminal/idle ordering ------------------------------------------------
@@ -366,9 +433,9 @@ test("completion releases only after both the matching terminal message and idle
   const a = makeHarness();
   t.after(() => a.close());
   await a.controller.resume(SESSION);
-  await holdAndRearm(a);
-  a.sdk.send(messageUpdated(userMessage("u-fresh")));
-  a.sdk.send(messageUpdated(assistantMessage("a-final", "u-fresh", { finish: "stop" })));
+  const expectedA = await holdAndRearm(a);
+  a.sdk.send(messageUpdated(userMessage(expectedA)));
+  a.sdk.send(messageUpdated(assistantMessage("a-final", expectedA, { finish: "stop" })));
   await settle();
   syncIdle(a);
   await settleFlush();
@@ -384,15 +451,15 @@ test("completion releases only after both the matching terminal message and idle
   const b = makeHarness();
   t.after(() => b.close());
   await b.controller.resume(SESSION);
-  await holdAndRearm(b);
+  const expectedB = await holdAndRearm(b);
   b.sdk.send(sessionIdle());
   await settle();
   syncIdle(b);
   await settleFlush();
   assert.equal(b.internals.queueHold, true, "idle alone did not release");
 
-  b.sdk.send(messageUpdated(userMessage("u-fresh")));
-  b.sdk.send(messageUpdated(assistantMessage("a-final", "u-fresh", { finish: "stop" })));
+  b.sdk.send(messageUpdated(userMessage(expectedB)));
+  b.sdk.send(messageUpdated(assistantMessage("a-final", expectedB, { finish: "stop" })));
   await settle();
   syncIdle(b);
   await settleFlush();
@@ -405,15 +472,15 @@ test("older, wrong-parent and wrong-session completions never release", async (t
   const h = makeHarness();
   t.after(() => h.close());
   await h.controller.resume(SESSION);
-  await holdAndRearm(h);
+  const expected = await holdAndRearm(h);
 
-  // The explicit turn's user message binds its identity.
-  h.sdk.send(messageUpdated(userMessage("u-fresh")));
+  // The explicit turn's exact user echo admits its identity.
+  h.sdk.send(messageUpdated(userMessage(expected)));
   await settle();
 
   // An older turn's terminal (wrong parent) and a wrong-session terminal.
   h.sdk.send(messageUpdated(assistantMessage("a-old", "u-old", { finish: "stop" })));
-  h.sdk.send(messageUpdated(assistantMessage("a-other", "u-fresh", { finish: "stop", sessionID: "other-session" })));
+  h.sdk.send(messageUpdated(assistantMessage("a-other", expected, { finish: "stop", sessionID: "other-session" })));
   await settle();
   h.sdk.send(sessionIdle());
   await settle();
@@ -424,7 +491,7 @@ test("older, wrong-parent and wrong-session completions never release", async (t
 
   // A genuine terminal message for the right parent still releases, proving the
   // bogus evidence was rejected rather than merely arriving too early.
-  h.sdk.send(messageUpdated(assistantMessage("a-final", "u-fresh", { finish: "stop" })));
+  h.sdk.send(messageUpdated(assistantMessage("a-final", expected, { finish: "stop" })));
   await settle();
   syncIdle(h);
   await settleFlush();
@@ -438,9 +505,9 @@ test("a tool-step is not terminal, but an abort permanently fails the turn close
   const stepped = makeHarness();
   t.after(() => stepped.close());
   await stepped.controller.resume(SESSION);
-  await holdAndRearm(stepped);
-  stepped.sdk.send(messageUpdated(userMessage("u-fresh")));
-  stepped.sdk.send(messageUpdated(assistantMessage("a-step", "u-fresh", { finish: "tool-calls" })));
+  const expectedStep = await holdAndRearm(stepped);
+  stepped.sdk.send(messageUpdated(userMessage(expectedStep)));
+  stepped.sdk.send(messageUpdated(assistantMessage("a-step", expectedStep, { finish: "tool-calls" })));
   stepped.sdk.send(sessionIdle());
   await settle();
   syncIdle(stepped);
@@ -448,7 +515,7 @@ test("a tool-step is not terminal, but an abort permanently fails the turn close
   assert.equal(stepped.internals.queueHold, true, "a tool step alone is not completion");
   assert.deepEqual(promptTexts(stepped.sdk), ["fresh work"]);
 
-  stepped.sdk.send(messageUpdated(assistantMessage("a-final", "u-fresh", { finish: "stop" })));
+  stepped.sdk.send(messageUpdated(assistantMessage("a-final", expectedStep, { finish: "stop" })));
   await settle();
   syncIdle(stepped);
   await settleFlush();
@@ -460,13 +527,13 @@ test("a tool-step is not terminal, but an abort permanently fails the turn close
   const aborted = makeHarness();
   t.after(() => aborted.close());
   await aborted.controller.resume(SESSION);
-  await holdAndRearm(aborted);
-  aborted.sdk.send(messageUpdated(userMessage("u-fresh")));
-  aborted.sdk.send(messageUpdated(assistantMessage("a-abort", "u-fresh", { error: true })));
+  const expectedAbort = await holdAndRearm(aborted);
+  aborted.sdk.send(messageUpdated(userMessage(expectedAbort)));
+  aborted.sdk.send(messageUpdated(assistantMessage("a-abort", expectedAbort, { error: true })));
   aborted.sdk.send(sessionIdle());
   await settle();
   syncIdle(aborted);
-  aborted.sdk.send(messageUpdated(assistantMessage("a-final", "u-fresh", { finish: "stop" })));
+  aborted.sdk.send(messageUpdated(assistantMessage("a-final", expectedAbort, { finish: "stop" })));
   await settle();
   syncIdle(aborted);
   await settleFlush();
@@ -522,18 +589,18 @@ test("a reconnect clears completion ownership and keeps the queue held", async (
   const h = makeHarness();
   t.after(() => h.close());
   await h.controller.resume(SESSION);
-  await holdAndRearm(h);
+  const expected = await holdAndRearm(h);
 
-  // Bind the explicit turn before reconnecting.
-  h.sdk.send(messageUpdated(userMessage("u-fresh")));
+  // Admit the explicit turn before reconnecting.
+  h.sdk.send(messageUpdated(userMessage(expected)));
   await settle();
 
   // The reconnect reloads history that already contains a terminal completion
   // for that same parent, but no live run owns it.
   const next = makeSdk();
   next.history.push(
-    { info: userMessage("u-fresh"), parts: [] },
-    { info: assistantMessage("a-final", "u-fresh", { finish: "stop" }), parts: [] },
+    { info: userMessage(expected), parts: [] },
+    { info: assistantMessage("a-final", expected, { finish: "stop" }), parts: [] },
   );
   await h.controller.reconnect({ client: next.client as never });
   next.send(sessionIdle());

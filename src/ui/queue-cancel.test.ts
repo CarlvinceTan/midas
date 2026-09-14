@@ -357,6 +357,7 @@ test("natural completion dispatches exactly one item and a transient idle cannot
   await enqueue(h, "A");
   await enqueue(h, "B");
   // The run genuinely completes (no cancellation involved).
+  h.proveCompletion();
   idle(h);
   await settleFlush();
   assert.deepEqual(h.promptCalls.map((call) => call.text), ["A"], "one follow-up is dispatched");
@@ -368,8 +369,15 @@ test("natural completion dispatches exactly one item and a transient idle cannot
   await settleFlush();
   assert.equal(h.promptCalls.length, 1, "the admission guard blocks the transient idle");
 
-  // Once A's user message lands, the next genuine idle dispatches B.
+  // A's user message landing proves admission only, never completion: a bare
+  // idle still cannot dispatch B without a fresh completion proof.
   h.transcript.addLocalUserMessage("A", false);
+  idle(h);
+  await settleFlush();
+  assert.equal(h.promptCalls.length, 1, "admission is not completion");
+
+  // A's genuine completion grants exactly the next dispatch.
+  h.proveCompletion();
   idle(h);
   await settleFlush();
   assert.deepEqual(h.promptCalls.map((call) => call.text), ["A", "B"]);
@@ -622,6 +630,76 @@ test("a cancellation while an explicitly dequeued shell runs is not undone by it
   assert.equal(h.internals.queueHold, true, "the cancelled job's finally did not release the hold");
   assert.equal(h.promptCalls.length, 0, "the follow-up was not drained");
   assert.deepEqual(h.internals.queue.map((item) => item.text), ["normal follow-up"]);
+});
+
+test("an explicitly dequeued local shell runs only itself and never releases the stopped queue", async (t) => {
+  for (const outcome of ["resolve", "reject"] as const) {
+    const h = makeHarness({ busy: true });
+    t.after(() => h.close());
+
+    await enqueue(h, "! echo local");
+    await enqueue(h, "A");
+    await enqueue(h, "B");
+    assert.deepEqual(h.internals.queue.map((item) => item.text), ["! echo local", "A", "B"]);
+
+    h.internals.handleGlobalKey(ESC);
+    await flush();
+    assert.equal(h.internals.queueHold, true, `${outcome}: Esc holds the queue`);
+
+    // The shell stays pending so its outcome can be chosen below.
+    let finish!: (error?: unknown) => void;
+    const running = new Promise<void>((resolve, reject) => {
+      finish = (error) => (error === undefined ? resolve() : reject(error));
+    });
+    let started = 0;
+    h.internals.runShellCommand = async () => {
+      started += 1;
+      await running;
+    };
+
+    h.internals.handleGlobalKey(SUPER_ENTER);
+    await flush();
+    assert.equal(started, 1, `${outcome}: the shell was explicitly run`);
+    assert.deepEqual(h.internals.queue.map((item) => item.text), ["A", "B"], `${outcome}: only the shell left the queue`);
+
+    // Success or failure, the local job's settlement must not release/drain.
+    finish(outcome === "reject" ? new Error("shell failed") : undefined);
+    await settleFlush();
+    assert.equal(h.internals.queueHold, true, `${outcome}: the stopped queue stayed stopped`);
+    assert.deepEqual(h.internals.queue.map((item) => item.text), ["A", "B"], `${outcome}: A/B are unchanged`);
+    assert.equal(h.promptCalls.length, 0, `${outcome}: no model/context prompt was sent`);
+    assert.equal(h.runCommands.length, 0, `${outcome}: no command was sent`);
+    assert.equal(localUserMessages(h), 0, `${outcome}: nothing was added to the context`);
+
+    // A second explicit key sends exactly A, leaving B.
+    h.internals.handleGlobalKey(SUPER_ENTER);
+    await flush();
+    assert.deepEqual(h.promptCalls.map((call) => call.text), ["A"], `${outcome}: the second key sends A`);
+    assert.deepEqual(h.internals.queue.map((item) => item.text), ["B"], `${outcome}: B stays queued`);
+  }
+});
+
+test("an explicit dequeue spends an armed automatic grant so one key cannot dispatch two items", async (t) => {
+  const h = makeHarness({ busy: true });
+  t.after(() => h.close());
+
+  await enqueue(h, "A");
+  await enqueue(h, "B");
+  // A genuine completion arms an automatic flush.
+  h.proveCompletion();
+  idle(h);
+  assert.notEqual(h.internals.queueFlushTimer, undefined, "an automatic flush is armed");
+
+  // Before the debounce fires, the user explicitly dequeues the top item.
+  h.internals.handleGlobalKey(SUPER_ENTER);
+  await flush();
+  assert.deepEqual(h.promptCalls.map((call) => call.text), ["A"], "the explicit key sent one item");
+  assert.equal(h.internals.queueFlushTimer, undefined, "the explicit key cancelled the armed flush");
+
+  // The armed grant must not leak a second item once the timer would have fired.
+  await settleFlush();
+  assert.deepEqual(h.promptCalls.map((call) => call.text), ["A"], "the armed flush did not send a second item");
+  assert.deepEqual(h.internals.queue.map((item) => item.text), ["B"]);
 });
 
 test("queued commands are preserved and never run on cancellation", async (t) => {
