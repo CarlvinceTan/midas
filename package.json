@@ -26,6 +26,7 @@
     "zod": "^4.6.2"
   },
   "devDependencies": {
+    "@prevalentware/opencode-goal-plugin": "0.1.48",
     "@types/node": "^22.10.0",
     "tsx": "^4.23.13",
     "typescript": "^5.7.0"
