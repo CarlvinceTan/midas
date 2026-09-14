@@ -82,18 +82,25 @@ test("an unrelated dirty file does not block the merge and survives it byte-iden
 
 test("a post-merge check failure restores the branch without disturbing unrelated WIP", async (t) => {
   const { cwd, board } = fixture(t);
-  const task = board.add({ ...contract, checks: ["test -f result.txt", "test ! -f blocker.txt"] });
-  await runTask(board, task.id, async (_, attempt) => writeFileSync(join(attempt.worktree, "result.txt"), "done\n"));
+  const first = board.add(contract);
+  const second = board.add({ ...contract, checks: ["test -f result.txt", "test \"$(cat result.txt)\" = second"] });
+  await runTask(board, first.id, async (_, attempt) => writeFileSync(join(attempt.worktree, "result.txt"), "first\n"));
+  await runTask(board, second.id, async (_, attempt) => writeFileSync(join(attempt.worktree, "result.txt"), "second\n"));
+  await mergeTask(board, first.id);
   const base = git(cwd, "rev-parse", "HEAD");
-  // Unrelated work-in-progress keeps the merge eligible but fails the check.
+  // Unrelated work-in-progress stays untouched even when integration fails.
   writeFileSync(join(cwd, "base.txt"), "user edits\n");
   writeFileSync(join(cwd, "blocker.txt"), "keep\n");
-  await assert.rejects(mergeTask(board, task.id), /Check failed/);
+  // The resolver settles the conflict with content the integration check rejects.
+  await assert.rejects(
+    mergeTask(board, second.id, undefined, async (_task, dir) => { writeFileSync(join(dir, "result.txt"), "wrong\n"); }),
+    /Check failed/,
+  );
   assert.equal(git(cwd, "rev-parse", "HEAD"), base);
-  assert.equal(board.get(task.id).merge, "failed");
+  assert.equal(board.get(second.id).merge, "failed");
   assert.equal(readFileSync(join(cwd, "base.txt"), "utf8"), "user edits\n");
   assert.equal(readFileSync(join(cwd, "blocker.txt"), "utf8"), "keep\n");
-  assert.equal(existsSync(join(cwd, "result.txt")), false);
+  assert.equal(readFileSync(join(cwd, "result.txt"), "utf8"), "first\n");
 });
 
 test("claims prevent duplicate workers; dependencies wait for merge", async (t) => {
