@@ -178,6 +178,46 @@ export interface FrozenFilePayload {
   attachment?: PromptAttachment;
 }
 
+/** True when a frozen payload still carries the data it claims to. */
+function isUsableFrozenFile(file: FrozenFilePayload | undefined): file is FrozenFilePayload {
+  if (!file) return false;
+  if (typeof file.name !== "string" || typeof file.mime !== "string") return false;
+  if (file.kind === "text") return typeof file.content === "string";
+  if (file.kind === "image") return typeof file.attachment?.url === "string" && file.attachment.url.length > 0;
+  return false;
+}
+
+/** The usable frozen payload matching a chip's identity, marker included. */
+function frozenFileForChip(chip: FileChip, frozen: readonly FrozenFilePayload[] | undefined): FrozenFilePayload | undefined {
+  const key = chip.id ?? chip.path;
+  for (const file of frozen ?? []) {
+    if ((file.id ?? file.path) === key && file.marker === chip.marker && isUsableFrozenFile(file)) return file;
+  }
+  return undefined;
+}
+
+/** Generic file chips whose frozen payload is unavailable and must be reattached. */
+function filesNeedingReattach(
+  files: readonly FileChip[] | undefined,
+  frozen: readonly FrozenFilePayload[] | undefined,
+): FileChip[] {
+  return (files ?? []).filter((chip) => !frozenFileForChip(chip, frozen));
+}
+
+function fileChipLabel(chip: FileChip): string {
+  return chip.name ?? basename(chip.path);
+}
+
+/**
+ * The actionable message shown when delivery of a queued file is refused
+ * because its saved payload is gone. It names the files, states that nothing was
+ * sent, and tells the user how to proceed without ever reading the disk for them.
+ */
+function reattachMessage(files: readonly FileChip[]): string {
+  const names = files.map(fileChipLabel).join(", ");
+  return `The queued file contents for ${names} are unavailable, so nothing was sent. Re-attach ${names} or remove the chip${files.length > 1 ? "s" : ""} in the queued message, then submit again to send the current contents.`;
+}
+
 /** One file handed to `formatUntrustedFileSections`. */
 export interface UntrustedFileSection {
   name: string;
@@ -716,6 +756,12 @@ interface QueuedPrompt {
    * appends the same content twice.
    */
   frozenFiles?: FrozenFilePayload[];
+  /**
+   * Generic file chips whose frozen payload was unavailable (a restart or a
+   * persistence drop). Their disk file is never read on the app's behalf:
+   * delivery pauses until the user explicitly reattaches or removes the chip.
+   */
+  needsReattach?: FileChip[];
 }
 
 /** Outcome of turning visible input into a deliverable prompt. */
@@ -874,6 +920,8 @@ export class MidasApp {
   private queueDispatchedAt = -1;
   /** Pending debounced queue flush. */
   private queueFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Queue item already warned about a missing frozen payload, to avoid spam. */
+  private reattachNotified: QueuedPrompt | undefined;
   /** Pending debounced draft save, and the session it belongs to. */
   private draftTimer: ReturnType<typeof setTimeout> | undefined;
   private draftTimerSession: string | undefined;
@@ -2171,13 +2219,24 @@ export class MidasApp {
     this.sessionBash = state?.bash ?? [];
     // Follow-ups that were still queued when the session was exited come back,
     // including the file chips and the payloads frozen when they were prepared.
-    this.queue = (state?.queue ?? []).map((item) => ({
-      text: item.text,
-      attachments: item.attachments ?? [],
-      ...(item.chips ? { chips: item.chips } : {}),
-      ...(item.files ? { files: item.files } : {}),
-      ...(item.frozenFiles ? { frozenFiles: item.frozenFiles as FrozenFilePayload[] } : {}),
-    }));
+    // A chip whose payload did not survive (over-cap, malformed or a legacy
+    // queue with no snapshot) is marked for explicit reattachment instead of
+    // being re-read from disk.
+    this.queue = (state?.queue ?? []).map((item) => {
+      const frozenFiles = item.frozenFiles as FrozenFilePayload[] | undefined;
+      const unresolved = filesNeedingReattach(item.files, frozenFiles);
+      for (const marked of item.unfrozenFiles ?? []) {
+        if (!unresolved.some((chip) => (chip.id ?? chip.path) === (marked.id ?? marked.path))) unresolved.push(marked);
+      }
+      return {
+        text: item.text,
+        attachments: item.attachments ?? [],
+        ...(item.chips ? { chips: item.chips } : {}),
+        ...(item.files ? { files: item.files } : {}),
+        ...(frozenFiles ? { frozenFiles } : {}),
+        ...(unresolved.length > 0 ? { needsReattach: unresolved } : {}),
+      };
+    });
     const target = directoryExists(state?.cwd) ? state.cwd : fallbackCwd;
     if (target && target !== this.options.cwd && directoryExists(target)) {
       await this.changeDirectory(target);
@@ -2265,13 +2324,17 @@ export class MidasApp {
     ensureDispatcherOnSubmit(multitask, () => this.syncDispatcher());
     // An edited queue entry whose visible text is unchanged reuses its frozen
     // payloads, so re-submitting never re-reads a file or appends its content
-    // twice. Any edited text re-prepares, reusing the frozen payloads per chip.
-    const reused = editing && editing.prompt.text === trimmed ? editing.prompt : undefined;
+    // twice -- but only while every chip still has a usable payload. A chip
+    // whose payload is gone must be reattached explicitly, never re-read.
+    const reused =
+      editing && editing.prompt.text === trimmed && this.queuedFilesNeedingReattach(editing.prompt).length === 0
+        ? editing.prompt
+        : undefined;
     let prompt: QueuedPrompt;
     if (reused) {
       prompt = reused;
     } else {
-      const prepared = this.preparePrompt(trimmed, images, files, editing?.prompt.frozenFiles);
+      const prepared = this.preparePrompt(trimmed, images, files, editing?.prompt.frozenFiles, editing?.prompt.files);
       if (!prepared.ok) {
         // Keep the input so an unsupported attachment stays recoverable instead
         // of being silently dropped or submitted as a bare label.
@@ -2377,6 +2440,7 @@ export class MidasApp {
     imageAttachments?: Array<{ marker: string; path: string }>,
     fileAttachments?: FileChip[],
     frozenFiles?: readonly FrozenFilePayload[],
+    queuedFiles?: readonly FileChip[],
   ): PreparedPrompt {
     let body = text;
     const attachments: PromptAttachment[] = [];
@@ -2416,16 +2480,25 @@ export class MidasApp {
       return { ok: false, error: `Couldn't attach the files: at most ${MAX_BATCH_FILES} files can be attached. Remove some chips.` };
     }
     // Reuse a frozen payload per chip identity so an edit/re-queue never
-    // re-reads a file that changed after it was attached.
+    // re-reads a file that changed after it was attached. A chip that was part
+    // of an already-queued prompt but whose payload is gone is never re-read:
+    // it is reported for explicit reattachment instead. Only a genuinely new
+    // chip (an explicit fresh attach) is allowed to read the disk.
     const frozenByKey = new Map<string, FrozenFilePayload>();
-    for (const frozen of frozenFiles ?? []) frozenByKey.set(frozen.id ?? frozen.path, frozen);
+    for (const frozen of frozenFiles ?? []) {
+      if (isUsableFrozenFile(frozen)) frozenByKey.set(frozen.id ?? frozen.path, frozen);
+    }
+    const queuedKeys = new Set((queuedFiles ?? []).map((chip) => chip.id ?? chip.path));
     const payloads = new Map<FileChip, FrozenFilePayload>();
     const pending: FileChip[] = [];
+    const unresolved: FileChip[] = [];
     for (const chip of files) {
       const cached = frozenByKey.get(chip.id ?? chip.path);
       if (cached && cached.marker === chip.marker) payloads.set(chip, cached);
+      else if (queuedKeys.has(chip.id ?? chip.path)) unresolved.push(chip);
       else pending.push(chip);
     }
+    if (unresolved.length > 0) return { ok: false, error: reattachMessage(unresolved) };
     if (pending.length > 0) {
       const read = readPromptFiles(pending.map((chip) => chip.path));
       if (!read.ok) return { ok: false, error: describeFileAttachmentError(read) };
@@ -2492,22 +2565,28 @@ export class MidasApp {
   }
 
   /**
-   * Rebuild a restored queue item's payloads when persistence had to drop them
-   * (content over the per-item cap). Without this a resumed queue could send a
-   * bare label; with it, the file is re-read once at flush time.
+   * Generic file chips on a queued prompt that have no usable frozen payload
+   * (dropped at persistence, malformed, or a legacy snapshot with no payload).
+   * These must never be re-read from disk on the prompt's behalf.
    */
-  private rehydrateQueuePrompt(prompt: QueuedPrompt): QueuedPrompt {
-    if ((prompt.files?.length ?? 0) === 0 || (prompt.frozenFiles?.length ?? 0) > 0) return prompt;
-    const prepared = this.preparePrompt(prompt.text, prompt.chips, prompt.files);
-    if (!prepared.ok) {
-      this.fail(prepared.error);
-      return prompt;
-    }
-    // The restored item already carries its frozen image attachments.
-    const extra = prepared.prompt.attachments.filter(
-      (candidate) => !prompt.attachments.some((held) => held.url === candidate.url),
+  private queuedFilesNeedingReattach(prompt: QueuedPrompt): FileChip[] {
+    const marked = new Set((prompt.needsReattach ?? []).map((chip) => chip.id ?? chip.path));
+    return (prompt.files ?? []).filter(
+      (chip) => marked.has(chip.id ?? chip.path) || !frozenFileForChip(chip, prompt.frozenFiles),
     );
-    return { ...prepared.prompt, attachments: [...prompt.attachments, ...extra] };
+  }
+
+  /**
+   * Pause delivery of a queued prompt whose frozen payload is gone. The queue
+   * slot and its chips stay exactly where they are, so the message is never
+   * lost; the user gets one actionable notice per blocked item.
+   */
+  private refuseQueuedDelivery(prompt: QueuedPrompt, files: FileChip[]): void {
+    this.queueDispatchedAt = -1;
+    this.tui.requestRender();
+    if (this.reattachNotified === prompt) return;
+    this.reattachNotified = prompt;
+    this.fail(reattachMessage(files));
   }
 
   /** Run a `!` shell command locally with a persistent working directory. */
@@ -2694,11 +2773,19 @@ export class MidasApp {
     // prompt has actually landed as a user message, so a transient idle (before
     // the server reports "busy") can't drain the whole queue at once.
     if (this.queueDispatchedAt >= 0 && this.userMessageCount() <= this.queueDispatchedAt) return;
-    const next = this.queue.shift();
+    const next = this.queue[0];
     if (next === undefined) {
       this.queueDispatchedAt = -1;
       return;
     }
+    // A queued file prompt whose frozen payload is gone must never be re-read
+    // from disk at flush time. Pause it in place until the user reattaches.
+    const unresolved = this.queuedFilesNeedingReattach(next);
+    if (unresolved.length > 0) {
+      this.refuseQueuedDelivery(next, unresolved);
+      return;
+    }
+    this.queue.shift();
     this.persistSessionState();
     this.queueDispatchedAt = this.userMessageCount();
     this.tui.requestRender();
@@ -2729,7 +2816,7 @@ export class MidasApp {
         });
       return;
     }
-    const prompt = this.rehydrateQueuePrompt(next);
+    const prompt = next;
     void this.sendPrompt(this.deliveryText(prompt), prompt.attachments);
   }
 
@@ -2753,6 +2840,13 @@ export class MidasApp {
       this.warn("Command queued until the run settles");
       return;
     }
+    // Steering a queued file prompt must not re-read a file whose frozen payload
+    // is gone; keep it queued and require an explicit reattach instead.
+    const unresolved = this.queuedFilesNeedingReattach(item);
+    if (unresolved.length > 0) {
+      this.refuseQueuedDelivery(item, unresolved);
+      return;
+    }
     // Only the top item leaves the queue.
     this.queue.shift();
     this.persistSessionState();
@@ -2761,7 +2855,7 @@ export class MidasApp {
       void this.runShellCommand(shell.command, shell.exclude);
       return;
     }
-    this.steerPrompt(this.rehydrateQueuePrompt(item));
+    this.steerPrompt(item);
   }
 
   /**

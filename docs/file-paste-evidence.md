@@ -79,14 +79,25 @@ attachments, the file chips, and the once-read `frozenFiles` payloads. Editing a
 queued follow-up restores only the visible text and chip mappings (never the
 inlined content), so re-submitting cannot append the same content twice. Reusing
 the frozen payload per chip identity means a file that changed after it was
-attached is never silently re-read. The queue, chip identities and frozen payloads
-are persisted per session in isolated config roots and rehydrated on resume; if
-persistence had to drop an over-cap payload, the file is re-read once at flush
-time rather than sending the label alone.
+attached is never silently re-read.
+
+The queue, chip identities and frozen payloads are persisted per session in
+isolated config roots and rehydrated on resume. Persistence keeps every payload
+that fits its cap and drops only the offending ones, so one oversized image can
+never discard the frozen text beside it. A generic file chip whose payload is
+missing or malformed after a restart — dropped at persistence, corrupted in the
+state file, or absent from a legacy queue that saved no snapshot — is marked
+explicitly and **never re-read from disk on the user's behalf**. Flush, queue
+edit/resubmit and active queued steer all pause instead: the queued message and
+its chip identity are retained, and the user is told to re-attach the file or
+remove the chip. Explicitly reattaching a file (or resubmitting it as fresh
+input) reads and sends its current contents, while a healthy snapshot round-trips
+exactly and stays frozen. Image-only queues keep their existing behavior; a
+generic file queue saved without a snapshot is not treated as valid.
 
 ## Evidence matrix
 
-Automated proof lives in `src/ui/file-attachments.test.ts` (22 tests), plus the
+Automated proof lives in `src/ui/file-attachments.test.ts` (24 tests), plus the
 merged T44/T45 suites and the app/component suites. All of these run against a
 fake controller, fake terminal and synthetic temp files under an isolated
 `HOME`/`XDG_*`/`MIDAS_CONFIG_DIR`/`PI_CONFIG_DIR` sandbox. No model, opencode
@@ -112,6 +123,8 @@ server, board, clipboard or real user file is touched.
 | 16 | Batch file/byte limits and specific errors keep the input recoverable | pass | `attachments.test.ts`, `file-attachments.test.ts` |
 | 17 | Transcript renders `[File: …]` with the image-chip yellow style | pass | `components/user-prompt.test.ts` |
 | 18 | `/goal` arguments/agent/busy and optional metadata safety are unchanged | pass | `goal-lifecycle.test.ts`, `goal-command.test.ts`, `task-metadata.test.ts` |
+| 19 | A restart that loses a frozen payload pauses flush/edit/steer; only explicit reattachment reads the disk | pass | `file-attachments.test.ts`, `session-state.test.ts` |
+| 20 | Per-file persistence keeps the valid payloads in a mixed batch; dropped/malformed/legacy chips are marked | pass | `session-state.test.ts`, `file-attachments.test.ts` |
 
 Typecheck (`npm run typecheck`) passes with these changes.
 

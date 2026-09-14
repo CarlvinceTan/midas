@@ -30,6 +30,18 @@ export interface StoredFrozenFile {
   attachment?: { mime: string; filename: string; url: string };
 }
 
+/**
+ * A generic file chip whose payload could not be persisted. A restored queue
+ * must never re-read these from disk: it pauses until the user explicitly
+ * reattaches the file (or removes the chip).
+ */
+export interface StoredUnfrozenFile {
+  marker: string;
+  path: string;
+  id?: string;
+  name?: string;
+}
+
 /** A queued follow-up retained so an exited session's queue survives a resume. */
 export interface StoredQueuedPrompt {
   text: string;
@@ -40,6 +52,14 @@ export interface StoredQueuedPrompt {
   files?: Array<{ marker: string; path: string; id?: string; name?: string }>;
   /** File payloads read when the prompt was prepared. */
   frozenFiles?: StoredFrozenFile[];
+  /** Generic chips from `files` whose payload is unavailable; they need reattach. */
+  unfrozenFiles?: StoredUnfrozenFile[];
+  /**
+   * Chips the app already flagged for reattachment (e.g. a malformed payload or
+   * one missing its `frozenFiles` snapshot). Carried into `unfrozenFiles` so the
+   * explicit marker survives re-persistence.
+   */
+  needsReattach?: StoredUnfrozenFile[];
 }
 
 /** Client-side session state that opencode does not persist for us. */
@@ -64,16 +84,18 @@ const MAX_QUEUE = 50;
 const MAX_ATTACHMENT_URL = 1_500_000;
 const MAX_FROZEN_CONTENT = 1_500_000;
 
-function frozenFilesWithinCaps(files: readonly StoredFrozenFile[] | undefined): StoredFrozenFile[] | undefined {
-  if (!files || files.length === 0) return undefined;
-  for (const file of files) {
-    if (file.kind === "image") {
-      if ((file.attachment?.url.length ?? 0) > MAX_ATTACHMENT_URL) return undefined;
-    } else if ((file.content?.length ?? 0) > MAX_FROZEN_CONTENT) {
-      return undefined;
-    }
-  }
-  return [...files];
+/**
+ * Keep every frozen payload that fits the per-item persistence caps. Only the
+ * offending payload is dropped; the rest of the batch stays frozen, so one
+ * oversized image can never force a queued text file to be re-read on resume.
+ * `writeSessionState` marks the chips those dropped payloads belonged to.
+ */
+function frozenFilesWithinCaps(files: readonly StoredFrozenFile[] | undefined): StoredFrozenFile[] {
+  if (!files || files.length === 0) return [];
+  return files.filter((file) => {
+    if (file.kind === "image") return (file.attachment?.url.length ?? 0) <= MAX_ATTACHMENT_URL;
+    return (file.content?.length ?? 0) <= MAX_FROZEN_CONTENT;
+  });
 }
 
 export function sessionStatePath(): string {
@@ -119,8 +141,25 @@ export function writeSessionState(sessionId: string | undefined, state: StoredSe
   }));
   // Keep the queue bounded; oversized inline attachments are dropped so an
   // image-heavy queue cannot bloat the state file (the text is still kept).
+  // Frozen payloads are filtered per file: a batch that contains one over-cap
+  // payload still keeps every other file frozen. Each chip left without a
+  // payload is recorded explicitly in `unfrozenFiles`, so a resumed queue can
+  // pause for an explicit reattach instead of silently re-reading the disk.
   const queue = state.queue?.slice(-MAX_QUEUE).map((item) => {
     const frozenFiles = frozenFilesWithinCaps(item.frozenFiles);
+    const frozenKeys = new Set(frozenFiles.map((file) => file.id ?? file.path));
+    const unfrozenFiles: StoredUnfrozenFile[] = [];
+    const seen = new Set<string>();
+    const markUnfrozen = (chip: StoredUnfrozenFile): void => {
+      const key = chip.id ?? chip.path;
+      if (seen.has(key)) return;
+      seen.add(key);
+      unfrozenFiles.push(chip);
+    };
+    for (const chip of item.needsReattach ?? []) markUnfrozen(chip);
+    for (const chip of item.files ?? []) {
+      if (!frozenKeys.has(chip.id ?? chip.path)) markUnfrozen(chip);
+    }
     return {
       text: item.text,
       ...(item.attachments
@@ -128,7 +167,8 @@ export function writeSessionState(sessionId: string | undefined, state: StoredSe
         : {}),
       ...(item.chips && item.chips.length > 0 ? { chips: item.chips } : {}),
       ...(item.files && item.files.length > 0 ? { files: item.files } : {}),
-      ...(frozenFiles ? { frozenFiles } : {}),
+      ...(frozenFiles.length > 0 ? { frozenFiles } : {}),
+      ...(unfrozenFiles.length > 0 ? { unfrozenFiles } : {}),
     };
   });
   if (!state.cwd && (!bash || bash.length === 0) && (!queue || queue.length === 0)) {

@@ -45,7 +45,7 @@ process.env.MIDAS_NO_UPDATE = "1";
 
 const { MidasApp, formatUntrustedFileSections, describeFileAttachmentError } = await import("./app.ts");
 const { Transcript } = await import("../state/transcript.ts");
-const { readSessionState } = await import("../lib/session-state.ts");
+const { readSessionState, writeSessionState } = await import("../lib/session-state.ts");
 const { initTheme } = await import("../theme/theme.ts");
 const { initTheme: initPiTheme } = await import("@earendil-works/pi-coding-agent");
 
@@ -101,6 +101,7 @@ interface QueueShape {
   attachments: PromptAttachment[];
   files?: FileChip[];
   frozenFiles?: FrozenFilePayload[];
+  needsReattach?: FileChip[];
 }
 
 interface AppHarness {
@@ -624,7 +625,7 @@ test("editing a queued file prompt neither duplicates content nor re-reads the f
   }
 });
 
-test("queue state round-trips through isolated roots and rehydrates on flush", async () => {
+test("queue state round-trips through isolated roots and flushes the frozen payload", async () => {
   const h = makeHarness({ busy: true });
   try {
     const path = makeFile("PERSISTED-BODY");
@@ -674,6 +675,130 @@ test("re-queuing an edited follow-up reorders without duplicating its payload", 
     assert.equal(h.promptCalls[0]!.text.split("REORDER-BODY").length - 1, 1);
   } finally {
     h.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Restart: a lost frozen payload pauses delivery instead of re-reading
+// ---------------------------------------------------------------------------
+
+test("a restored mixed batch with an over-cap image pauses flush/edit/steer until reattached", async () => {
+  const h = makeHarness({ busy: true });
+  try {
+    const textPath = makeFile("ORIGINAL-TEXT");
+    // A generic file chip whose image payload is valid to read (<= 25 MiB) but
+    // whose persisted data URL exceeds the 1,500,000-char state cap.
+    const bigImage = makeSparseFile("big-shot.png", 1_200_000);
+    h.editor.insertFileAttachment(textPath);
+    h.editor.insertFileAttachment(bigImage);
+    await submit(h.editor);
+    assert.equal(h.internals.queue.length, 1, "busy input queues the mixed batch");
+    assert.equal(h.internals.queue[0]!.frozenFiles?.length, 2, "both payloads are frozen in memory");
+
+    // Persist and restart; the text source changes on disk meanwhile.
+    h.internals.persistSessionState();
+    writeFileSync(textPath, "CHANGED-TEXT");
+    const persisted = readSessionState("session-1")!.queue![0]!;
+    assert.equal(persisted.frozenFiles?.length, 1, "per-file persistence keeps the text payload");
+    assert.deepEqual(persisted.frozenFiles?.[0]?.content, "ORIGINAL-TEXT");
+    assert.equal(persisted.unfrozenFiles?.length, 1, "the over-cap image chip is explicitly marked");
+
+    h.internals.queue.length = 0;
+    await h.internals.restoreSessionShellState("session-1");
+    const restored = h.internals.queue[0]!;
+    assert.equal(restored.frozenFiles?.[0]?.content, "ORIGINAL-TEXT", "the valid payload is preserved");
+    assert.deepEqual(restored.needsReattach?.map((chip) => chip.name), ["big-shot.png"]);
+
+    // Flush must pause: no read of the changed text, no send, message retained.
+    h.transcript.setPhase("idle");
+    h.internals.maybeFlushQueue();
+    await flush();
+    assert.equal(h.promptCalls.length, 0, "flush never re-reads the changed file or sends");
+    assert.equal(h.internals.queue.length, 1, "the queued message is kept");
+    assert.match(h.failures.at(-1)!, /big-shot\.png.*unavailable.*re-attach/i);
+
+    // Steering the queued item must also pause, keeping the slot.
+    h.transcript.setPhase("busy");
+    h.internals.steerQueued();
+    await flush();
+    assert.equal(h.promptCalls.length, 0, "steer never sends the stale batch");
+    assert.equal(h.internals.queue.length, 1, "steer keeps the queued message");
+
+    // Editing restores both chips but still reads nothing.
+    h.internals.editQueued(0);
+    assert.equal(h.internals.queue.length, 0);
+    assert.equal(h.editor.getFileAttachments().length, 2, "chip identity is retained for reattachment");
+    assert.equal(h.promptCalls.length, 0);
+
+    // Resubmitting the unchanged, unresolved chip re-blocks instead of reading.
+    const failuresBefore = h.failures.length;
+    await submit(h.editor);
+    assert.equal(h.promptCalls.length, 0, "resubmit still does not send");
+    assert.equal(h.failures.length, failuresBefore + 1, "resubmit reports the reattach action");
+    assert.ok(h.editor.getText().includes("[File:"), "the chip stays recoverable in the input");
+
+    // Explicit reattachment of a fresh file then sends the chosen current content.
+    h.editor.setText("");
+    const fresh = makeFile("FRESH-CONTENT");
+    h.editor.insertFileAttachment(fresh);
+    h.transcript.setPhase("idle");
+    await submit(h.editor);
+    assert.equal(h.promptCalls.length, 1, "explicit reattachment sends");
+    assert.ok(h.promptCalls[0]!.text.includes("FRESH-CONTENT"));
+    assert.ok(!h.promptCalls[0]!.text.includes("CHANGED-TEXT"), "the changed file is never read");
+  } finally {
+    h.close();
+  }
+});
+
+test("a restored queue with a malformed or missing generic snapshot requires reattach", async () => {
+  const missingChip = { marker: "[File: legacy.txt]", path: "/legacy/legacy.txt", id: "file-legacy", name: "legacy.txt" };
+  const malformedChip = { marker: "[File: notes.md]", path: "/legacy/notes.md", id: "file-notes", name: "notes.md" };
+  const cases: Array<{ name: string; queue: Array<Record<string, unknown>>; verdict: RegExp }> = [
+    {
+      name: "missing snapshot",
+      queue: [{ text: "[File: legacy.txt]", attachments: [], files: [missingChip] }],
+      verdict: /legacy\.txt/,
+    },
+    {
+      name: "malformed snapshot",
+      queue: [
+        {
+          text: "[File: notes.md]",
+          attachments: [],
+          files: [malformedChip],
+          // A text payload with no usable content (nor the metadata a restored
+          // payload needs) is malformed; it must not be treated as frozen.
+          frozenFiles: [{ id: "file-notes", marker: "[File: notes.md]", path: "/legacy/notes.md", name: "notes.md", kind: "text" }],
+        },
+      ],
+      verdict: /notes\.md/,
+    },
+  ];
+
+  for (const entry of cases) {
+    const h = makeHarness({ busy: true });
+    try {
+      writeSessionState("session-1", { queue: entry.queue as never });
+      await h.internals.restoreSessionShellState("session-1");
+      assert.equal(h.internals.queue.length, 1, `${entry.name}: queue retained`);
+      assert.equal(h.internals.queue[0]!.needsReattach?.length, 1, `${entry.name}: marked for reattach`);
+
+      h.transcript.setPhase("idle");
+      h.internals.maybeFlushQueue();
+      await flush();
+      assert.equal(h.promptCalls.length, 0, `${entry.name}: flush sends nothing`);
+      assert.match(h.failures.at(-1)!, entry.verdict, `${entry.name}: names the file`);
+      assert.equal(h.internals.queue.length, 1, `${entry.name}: slot retained`);
+
+      h.transcript.setPhase("busy");
+      h.internals.steerQueued();
+      await flush();
+      assert.equal(h.promptCalls.length, 0, `${entry.name}: steer sends nothing`);
+      assert.equal(h.internals.queue.length, 1, `${entry.name}: steer keeps the slot`);
+    } finally {
+      h.close();
+    }
   }
 });
 
