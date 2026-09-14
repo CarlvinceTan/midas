@@ -128,6 +128,11 @@ interface AppHarness {
     handleSubmit(text: string, images?: Array<{ marker: string; path: string }>, files?: FileChip[]): Promise<void>;
     preparePrompt(text: string): unknown;
   };
+  /**
+   * Model the controller-side proof that the newest explicit turn genuinely
+   * completed. Without it, automatic queue delivery stays suppressed.
+   */
+  proveCompletion(): void;
   close(): void;
 }
 
@@ -135,12 +140,19 @@ function makeHarness(options: { busy?: boolean } = {}): AppHarness {
   const transcript = new Transcript();
   if (options.busy) transcript.setPhase("busy");
   const promptCalls: PromptCall[] = [];
+  // Only `proveCompletion` produces a grant, so a bare idle can never dispatch.
+  let completionProven = false;
   const controller: Record<string, unknown> = {
     id: "session-1",
     title: undefined,
     transcript,
     async prompt(text: string, attachments: PromptAttachment[] = []): Promise<void> {
       promptCalls.push({ text, attachments });
+    },
+    consumeQueueCompletion(): boolean {
+      if (!completionProven) return false;
+      completionProven = false;
+      return true;
     },
     async runCommand(): Promise<void> {},
     async abort(): Promise<void> {},
@@ -228,6 +240,9 @@ function makeHarness(options: { busy?: boolean } = {}): AppHarness {
       navigateEditorHistory: (direction) => raw.navigateEditorHistory(direction),
       handleSubmit: (text, images, files) => raw.handleSubmit(text, images, files),
       preparePrompt: (text) => raw.preparePrompt(text),
+    },
+    proveCompletion(): void {
+      completionProven = true;
     },
     close(): void {
       try {
@@ -581,6 +596,7 @@ test("a queued file prompt freezes its content and never re-reads a changed file
     // The file changes on disk before the queue drains.
     writeFileSync(path, "CHANGED-CONTENT");
     h.transcript.setPhase("idle");
+    h.proveCompletion();
     h.internals.maybeFlushQueue();
     await flush();
 
@@ -615,6 +631,7 @@ test("editing a queued file prompt neither duplicates content nor re-reads the f
     assert.equal(h.internals.queue[0]!.frozenFiles?.[0]?.content, "FROZEN-BODY");
 
     h.transcript.setPhase("idle");
+    h.proveCompletion();
     h.internals.maybeFlushQueue();
     await flush();
     const delivered = h.promptCalls[0]!.text;
@@ -641,6 +658,7 @@ test("queue state round-trips through isolated roots and flushes the frozen payl
     await h.internals.restoreSessionShellState("session-1");
     assert.equal(h.internals.queue.length, 1);
     h.transcript.setPhase("idle");
+    h.proveCompletion();
     h.internals.maybeFlushQueue();
     await flush();
     assert.ok(h.promptCalls[0]!.text.includes("PERSISTED-BODY"));
@@ -670,6 +688,7 @@ test("re-queuing an edited follow-up reorders without duplicating its payload", 
     assert.equal(h.internals.queue[0]!.frozenFiles?.[0]?.content, "REORDER-BODY");
 
     h.transcript.setPhase("idle");
+    h.proveCompletion();
     h.internals.maybeFlushQueue();
     await flush();
     assert.equal(h.promptCalls[0]!.text.split("REORDER-BODY").length - 1, 1);
@@ -711,6 +730,7 @@ test("a restored mixed batch with an over-cap image pauses flush/edit/steer unti
 
     // Flush must pause: no read of the changed text, no send, message retained.
     h.transcript.setPhase("idle");
+    h.proveCompletion();
     h.internals.maybeFlushQueue();
     await flush();
     assert.equal(h.promptCalls.length, 0, "flush never re-reads the changed file or sends");
@@ -785,6 +805,7 @@ test("a restored queue with a malformed or missing generic snapshot requires rea
       assert.equal(h.internals.queue[0]!.needsReattach?.length, 1, `${entry.name}: marked for reattach`);
 
       h.transcript.setPhase("idle");
+      h.proveCompletion();
       h.internals.maybeFlushQueue();
       await flush();
       assert.equal(h.promptCalls.length, 0, `${entry.name}: flush sends nothing`);
