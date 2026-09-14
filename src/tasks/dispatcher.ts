@@ -1,7 +1,5 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { TaskBoard, scopesOverlap, type Task } from "./board.ts";
-import { runTask, mergeTask, cleanupTask, type Worker, type OutputSink } from "./runner.ts";
+import { runTask, mergeTask, cleanupTask, TRANSIENT_RETRY_BUDGET, type Worker, type OutputSink } from "./runner.ts";
 
 export interface DispatcherOptions {
   /** Maximum tasks running at once. Omitted means unlimited. */
@@ -105,27 +103,65 @@ export class TaskDispatcher {
   }
 
   /**
-   * A `running` task with no live lock was left behind by a crashed process.
-   * Honour a pending halt/cancel, otherwise auto-requeue so a crash does not
-   * strand work. The existing worktree is reused by the next attempt.
+   * A `running` task whose task lock has no live owner was left behind by a
+   * crashed process. `TaskBoard.lock` takes over only a lock whose owner is a
+   * dead process on this host; a live, foreign, or unverifiable owner throws, so
+   * reclaiming the lock is exactly the proof that the run is abandoned — and it
+   * is held for the duration of the recovery, so two dispatchers cannot resume
+   * the same run twice. The lock is released before the replacement starts, so
+   * this never nests an acquisition of the same lock.
+   *
+   * A pending halt/cancel is honoured as the record of the crash. Otherwise the
+   * task is re-queued for a single replacement attempt and the interrupted
+   * attempt/worktree is left untouched for inspection — nothing is force-deleted.
+   * Repeated crashes are bounded by the transient retry budget, after which the
+   * task is parked instead of looping forever.
    */
   private async reconcile(): Promise<void> {
     for (const task of this.board.read().tasks) {
       if (task.status !== "running") continue;
-      if (existsSync(join(this.board.directory, `task-${task.id}.lock`))) continue;
-      const requested = task.requestedAction;
-      if (!requested) {
-        // A crashed run is requeued; drop its half-finished worktree so the next
-        // attempt starts clean instead of leaking it.
-        try { await cleanupTask(this.board, task.id, true); } catch { /* best effort */ }
-      }
-      this.board.update(task.id, (t) => {
-        t.requestedAction = undefined;
-        if (requested === "cancel") { t.status = "cancelled"; t.progress = undefined; t.detail = "Cancelled"; }
-        else if (requested === "pause") { t.status = "blocked"; t.detail = "Halted"; }
-        else { t.status = "new"; t.merge = "not-merged"; t.detail = "Requeued after an interrupted run"; }
-      });
-      this.options.onEvent?.(`${task.id}: interrupted; ${requested === "cancel" ? "cancelled" : requested === "pause" ? "blocked" : "requeued"}`);
+      let unlock: (() => void) | undefined;
+      try { unlock = this.board.lock(`task-${task.id}`); }
+      catch { continue; } // Live, foreign, or unverifiable owner: never recover it.
+      try {
+        // Re-read under the lock: a live worker may have changed the task since
+        // the scan. Do not treat a finished run as interrupted.
+        const current = this.board.get(task.id);
+        if (current.status !== "running") continue;
+        const requested = current.requestedAction;
+        const interrupted = current.attempts.at(-1)?.id;
+        let outcome: string;
+        if (requested === "cancel") {
+          outcome = "cancelled";
+          this.board.update(task.id, (t) => {
+            t.status = "cancelled"; t.requestedAction = undefined; t.progress = undefined; t.detail = "Cancelled";
+          });
+        } else if (requested === "pause") {
+          outcome = "blocked";
+          this.board.update(task.id, (t) => {
+            t.status = "blocked"; t.requestedAction = undefined; t.detail = "Halted";
+          });
+        } else {
+          const failures = (current.consecutiveFailures ?? 0) + 1;
+          if (failures > TRANSIENT_RETRY_BUDGET) {
+            outcome = "parked";
+            this.board.update(task.id, (t) => {
+              t.status = "blocked";
+              t.consecutiveFailures = failures;
+              t.detail = `Interrupted ${failures} times; inspect the preserved worktree before resuming`;
+            });
+          } else {
+            outcome = "requeued";
+            this.board.update(task.id, (t) => {
+              t.status = "new";
+              t.merge = "not-merged";
+              t.consecutiveFailures = failures;
+              t.detail = `Requeued after an interrupted run${interrupted ? `; attempt ${interrupted} preserved` : ""}`;
+            });
+          }
+        }
+        this.options.onEvent?.(`${task.id}: interrupted; ${outcome}`);
+      } finally { unlock(); }
     }
   }
 
