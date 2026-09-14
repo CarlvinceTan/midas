@@ -84,23 +84,79 @@ test("session state round-trips queued file chips and their frozen payloads", ()
   });
 });
 
-test("a queue item whose frozen content exceeds the cap drops the payload, keeping the chip", () => {
+test("a queue item whose frozen content exceeds the cap drops the payload and marks the chip", () => {
   withTempConfigDir(() => {
+    const chip = { marker: "[File: big.md]", path: "/tmp/big.md", id: "file-big", name: "big.md" };
     writeSessionState("ses_big", {
       queue: [
         {
           text: "[File: big.md]",
-          files: [{ marker: "[File: big.md]", path: "/tmp/big.md" }],
+          files: [chip],
           frozenFiles: [
-            { marker: "[File: big.md]", path: "/tmp/big.md", name: "big.md", kind: "text" as const, content: "x".repeat(1_500_001) },
+            { id: "file-big", marker: "[File: big.md]", path: "/tmp/big.md", name: "big.md", kind: "text" as const, content: "x".repeat(1_500_001) },
           ],
         },
       ],
     });
     const stored = readSessionState("ses_big")!.queue![0]!;
     assert.equal(stored.text, "[File: big.md]");
-    assert.deepEqual(stored.files, [{ marker: "[File: big.md]", path: "/tmp/big.md" }]);
-    assert.equal(stored.frozenFiles, undefined, "an oversized payload is dropped so it can be rehydrated, never sent as a bare label");
+    assert.deepEqual(stored.files, [chip]);
+    assert.equal(stored.frozenFiles, undefined, "the oversized payload is not stored");
+    assert.deepEqual(stored.unfrozenFiles, [chip], "the chip is explicitly marked for reattachment");
+  });
+});
+
+test("an over-cap payload is dropped per file, keeping the rest of the batch frozen", () => {
+  withTempConfigDir(() => {
+    const imageChip = { marker: "[File: shot.png]", path: "/tmp/shot.png", id: "file-image", name: "shot.png" };
+    const textChip = { marker: "[File: notes.md]", path: "/tmp/notes.md", id: "file-text", name: "notes.md" };
+    writeSessionState("ses_mixed", {
+      queue: [
+        {
+          text: "[File: shot.png] [File: notes.md]",
+          files: [imageChip, textChip],
+          frozenFiles: [
+            {
+              id: "file-image",
+              marker: "[File: shot.png]",
+              path: "/tmp/shot.png",
+              name: "shot.png",
+              kind: "image" as const,
+              attachment: { mime: "image/png", filename: "shot.png", url: `data:image/png;base64,${"x".repeat(1_500_000)}` },
+            },
+            {
+              id: "file-text",
+              marker: "[File: notes.md]",
+              path: "/tmp/notes.md",
+              name: "notes.md",
+              kind: "text" as const,
+              content: "KEPT-BODY",
+            },
+          ],
+        },
+      ],
+    });
+    const stored = readSessionState("ses_mixed")!.queue![0]!;
+    assert.deepEqual(stored.frozenFiles, [
+      {
+        id: "file-text",
+        marker: "[File: notes.md]",
+        path: "/tmp/notes.md",
+        name: "notes.md",
+        kind: "text" as const,
+        content: "KEPT-BODY",
+      },
+    ], "the text payload survives even though the image payload was dropped");
+    assert.deepEqual(stored.unfrozenFiles, [imageChip], "only the dropped image chip needs reattachment");
+  });
+});
+
+test("a queue with file chips but no frozen payload is marked for reattachment", () => {
+  withTempConfigDir(() => {
+    const chip = { marker: "[File: legacy.txt]", path: "/tmp/legacy.txt", id: "file-legacy", name: "legacy.txt" };
+    writeSessionState("ses_legacy", { queue: [{ text: "[File: legacy.txt]", files: [chip] }] });
+    const stored = readSessionState("ses_legacy")!.queue![0]!;
+    assert.deepEqual(stored.unfrozenFiles, [chip], "a legacy generic file queue is never treated as valid");
   });
 });
 
