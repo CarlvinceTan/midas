@@ -185,6 +185,27 @@ export function resolveSlashName(names: string[], name: string): string {
   return fuzzyFilter(names, name, (candidate) => candidate)[0] ?? name;
 }
 
+/** The controller command a nonempty `/goal` argument maps to. */
+export interface GoalRoute {
+  command: "goal" | "pause_goal" | "resume_goal";
+  args: string;
+}
+
+/**
+ * Resolve a typed `/goal [args]` into the controller command that serves it.
+ * A bare `/goal` returns `undefined` so the caller opens the picker. Pause and
+ * resume use the dedicated controls because the plugin treats them as
+ * pre-acknowledgement commands rather than ordinary goal arguments; every other
+ * nonempty argument is forwarded to the `goal` command verbatim, so
+ * `edit <objective>`, `status`, `clear` and a raw objective all keep their text.
+ */
+export function goalRoute(args: string): GoalRoute | undefined {
+  if (args === "") return undefined;
+  if (args === "pause") return { command: "pause_goal", args: "" };
+  if (args === "resume") return { command: "resume_goal", args: "" };
+  return { command: "goal", args };
+}
+
 /** Canonical voice state label, shared by the frame title and its toasts. */
 export function voiceStateLabel(ready: boolean): string {
   // Until the helper confirms it is listening, a model may still be downloading.
@@ -2649,7 +2670,7 @@ export class MidasApp {
     if (name === "skills") return this.openSkills();
     if (name === "login") return this.openLogin();
     if (name === "logout") return this.openLogout();
-    if (name === "goal") return this.openGoal();
+    if (name === "goal") return this.runGoal(args);
     const custom = this.customCommands.find((command) => command.name === name);
     if (custom) {
       // User-defined command: send its template as a normal prompt.
@@ -3908,6 +3929,17 @@ export class MidasApp {
     this.showOverlay(new PanelOverlay("logout", picker), { width: "60%", maxHeight: "60%" });
   }
 
+  /**
+   * Route a typed `/goal [args]`: a bare command opens the picker, pause and
+   * resume use their dedicated controls, and every other argument is forwarded
+   * to the `goal` command exactly as typed.
+   */
+  private runGoal(args: string): void {
+    const route = goalRoute(args);
+    if (!route) return this.openGoal();
+    void this.runController(route.command, route.args);
+  }
+
   private openGoal(): void {
     const picker = new OptionPicker(
       [
@@ -3930,6 +3962,9 @@ export class MidasApp {
           "",
           (text) => {
             this.closeOverlay();
+            // An empty objective cancels: never dispatch a blank new goal or a
+            // dangling `edit` with no text.
+            if (text.trim() === "") return;
             void this.runController("goal", isEdit ? `edit ${text}` : text);
           },
           () => this.closeOverlay(),
