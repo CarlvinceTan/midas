@@ -3,7 +3,7 @@ package stats
 import (
 	"context"
 
-	"github.com/CarlvinceTan/midas/internal/storage"
+	"github.com/CarlvinceTan/midas/pkg/storage"
 	"github.com/CarlvinceTan/midas/pkg/ai"
 )
 

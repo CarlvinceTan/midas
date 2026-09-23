@@ -3,7 +3,7 @@ package provider
 import (
 	"testing"
 
-	"github.com/CarlvinceTan/midas/internal/storage"
+	"github.com/CarlvinceTan/midas/pkg/storage"
 	"github.com/CarlvinceTan/midas/pkg/ai"
 	providerauth "github.com/CarlvinceTan/midas/pkg/ai/auth"
 )

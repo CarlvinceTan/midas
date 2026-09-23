@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/CarlvinceTan/midas/internal/goal"
-	"github.com/CarlvinceTan/midas/internal/storage"
+	"github.com/CarlvinceTan/midas/pkg/storage"
 	"github.com/CarlvinceTan/midas/pkg/agent"
 	"github.com/CarlvinceTan/midas/pkg/ai"
 )

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CarlvinceTan/midas/internal/storage"
+	"github.com/CarlvinceTan/midas/pkg/storage"
 	tuitext "github.com/CarlvinceTan/midas/internal/tui/text"
 )
 

@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/CarlvinceTan/midas/internal/goal"
-	"github.com/CarlvinceTan/midas/internal/mcp"
-	"github.com/CarlvinceTan/midas/internal/storage"
+	"github.com/CarlvinceTan/midas/pkg/mcp"
+	"github.com/CarlvinceTan/midas/pkg/storage"
 	codingtools "github.com/CarlvinceTan/midas/internal/tools"
 	"github.com/CarlvinceTan/midas/pkg/agent"
 	"github.com/CarlvinceTan/midas/pkg/ai"

@@ -9,7 +9,7 @@ import (
 
 	"github.com/CarlvinceTan/midas/internal/chat"
 	"github.com/CarlvinceTan/midas/internal/instructions"
-	"github.com/CarlvinceTan/midas/internal/mcp"
+	"github.com/CarlvinceTan/midas/pkg/mcp"
 	"github.com/CarlvinceTan/midas/internal/profiles"
 	midassettings "github.com/CarlvinceTan/midas/internal/settings"
 	"github.com/CarlvinceTan/midas/internal/skills"

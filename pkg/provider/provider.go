@@ -9,7 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/CarlvinceTan/midas/internal/storage"
+	"github.com/CarlvinceTan/midas/pkg/storage"
 	"github.com/CarlvinceTan/midas/pkg/ai"
 	providerauth "github.com/CarlvinceTan/midas/pkg/ai/auth"
 	providercatalog "github.com/CarlvinceTan/midas/pkg/ai/catalog"

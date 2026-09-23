@@ -14,14 +14,14 @@ pkg/agent                loop: events, steering, tools, compaction, cache warmin
 pkg/control              desktop and browser state, and acting on a surface
 pkg/control/cdp          Chromium/Firefox debugging endpoints
 pkg/hub                  optional local homeserver: bridges, store, MCP surface
+pkg/mcp                  MCP servers: config discovery, connections, tool adapters
+pkg/provider             provider and credential resolution, model discovery
+pkg/storage              session store: transcripts, drafts, queues
 pkg/vault                KeePass-compatible secrets: passwords, TOTP, recovery codes
 internal/chat            chat session runtime: turns, steering, title and status helpers
-internal/mcp             MCP servers: config discovery, connections, tool adapters
-internal/provider        provider and credential resolution, model discovery
-internal/storage         session store: transcripts, drafts, queues
 internal/tui             terminal UI
 internal/                goal, instructions, profiles, remote, settings, skills,
-                         stats, storage, tools, voice, and the entry points above
+                         stats, tools, voice, and the entry points above
 ```
 
 ## Dependency direction

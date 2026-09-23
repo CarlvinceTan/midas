@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/CarlvinceTan/midas/internal/storage"
+	"github.com/CarlvinceTan/midas/pkg/storage"
 )
 
 const (

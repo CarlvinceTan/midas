@@ -9,7 +9,7 @@ import (
 	tuitext "github.com/CarlvinceTan/midas/internal/tui/text"
 
 	"github.com/CarlvinceTan/midas/internal/profiles"
-	providerpkg "github.com/CarlvinceTan/midas/internal/provider"
+	providerpkg "github.com/CarlvinceTan/midas/pkg/provider"
 	midassettings "github.com/CarlvinceTan/midas/internal/settings"
 	"github.com/CarlvinceTan/midas/pkg/ai"
 )

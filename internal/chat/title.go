@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/CarlvinceTan/midas/internal/profiles"
-	"github.com/CarlvinceTan/midas/internal/provider"
+	"github.com/CarlvinceTan/midas/pkg/provider"
 	"github.com/CarlvinceTan/midas/pkg/ai"
 )
 
