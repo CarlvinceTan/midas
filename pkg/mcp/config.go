@@ -23,6 +23,11 @@ const (
 	settingsEnv = mcpconfig.OverrideEnv
 )
 
+// ScopeDir is the project-scoped directory read beside the shared .agents scope,
+// most specific first. An embedding product sets it to its own directory name
+// before first use; Midas keeps the default.
+var ScopeDir = ".midas"
+
 type configEnvelope struct {
 	MCPServers map[string]Config `json:"mcpServers"`
 	Servers    map[string]Config `json:"servers"`
@@ -105,7 +110,7 @@ func LoadConfigs(configDir, projectRoot string) (map[string]Config, error) {
 func scopedPaths(configDir, projectRoot, name string) []string {
 	paths := []string{}
 	if projectRoot != "" {
-		paths = append(paths, filepath.Join(projectRoot, ".agents", name), filepath.Join(projectRoot, ".midas", name))
+		paths = append(paths, filepath.Join(projectRoot, ".agents", name), filepath.Join(projectRoot, ScopeDir, name))
 	}
 	if configDir != "" {
 		paths = append(paths, filepath.Join(configDir, name))

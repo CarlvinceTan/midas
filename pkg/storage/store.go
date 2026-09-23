@@ -42,16 +42,23 @@ func New(dir string) *Store {
 
 func newWithClock(dir string, now func() time.Time) *Store { return &Store{dir: dir, now: now} }
 
-// ConfigDir returns MIDAS_CONFIG_DIR or ~/.midas.
+// Product identity for the per-user configuration directory. An embedding
+// product sets these once, before first use; Midas keeps the defaults.
+var (
+	ConfigEnv  = "MIDAS_CONFIG_DIR"
+	ConfigName = ".midas"
+)
+
+// ConfigDir returns ConfigEnv or ~/ConfigName.
 func ConfigDir() string {
-	if configured := os.Getenv("MIDAS_CONFIG_DIR"); configured != "" {
+	if configured := os.Getenv(ConfigEnv); configured != "" {
 		return configured
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".midas"
+		return ConfigName
 	}
-	return filepath.Join(home, ".midas")
+	return filepath.Join(home, ConfigName)
 }
 
 func (s *Store) SessionsPath() string     { return filepath.Join(s.dir, "sessions.json") }
