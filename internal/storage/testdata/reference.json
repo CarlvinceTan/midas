@@ -1,0 +1,210 @@
+{
+  "sessions": {
+    "read": [
+      {
+        "id": "s2",
+        "cwd": "/tmp/two",
+        "title": "Second",
+        "createdAt": 5,
+        "updatedAt": 5000
+      },
+      {
+        "id": "s1",
+        "cwd": "/tmp/one",
+        "title": "",
+        "createdAt": 1000,
+        "updatedAt": 1100
+      }
+    ],
+    "file": {
+      "s1": {
+        "id": "s1",
+        "cwd": "/tmp/one",
+        "title": "",
+        "createdAt": 1000,
+        "updatedAt": 1100
+      },
+      "s2": {
+        "id": "s2",
+        "cwd": "/tmp/two",
+        "title": "Second",
+        "createdAt": 5,
+        "updatedAt": 5000
+      }
+    }
+  },
+  "drafts": {
+    "s1": {
+      "text": "draft one",
+      "attachments": [
+        {
+          "marker": "[Image: a.png]",
+          "path": "/tmp/a.png"
+        }
+      ],
+      "files": [
+        {
+          "marker": "[File: a.txt]",
+          "path": "/tmp/a.txt",
+          "id": "f1",
+          "name": "a.txt"
+        }
+      ]
+    },
+    "s2": {
+      "text": "draft two"
+    },
+    "missing": null,
+    "file": {
+      "s1": {
+        "text": "draft one",
+        "attachments": [
+          {
+            "marker": "[Image: a.png]",
+            "path": "/tmp/a.png"
+          }
+        ],
+        "files": [
+          {
+            "marker": "[File: a.txt]",
+            "path": "/tmp/a.txt",
+            "id": "f1",
+            "name": "a.txt"
+          }
+        ],
+        "updatedAt": 2000
+      },
+      "s2": {
+        "text": "draft two",
+        "updatedAt": 2001
+      }
+    }
+  },
+  "state": {
+    "read": {
+      "cwd": "/work",
+      "bash": [
+        {
+          "command": "! pwd",
+          "output": "/work\n",
+          "exclude": false,
+          "status": "complete",
+          "exitCode": 0,
+          "at": 12
+        }
+      ],
+      "queue": [
+        {
+          "text": "empty attachments",
+          "attachments": []
+        },
+        {
+          "text": "files",
+          "files": [
+            {
+              "marker": "[File: kept.txt]",
+              "path": "/tmp/kept.txt",
+              "id": "kept",
+              "name": "kept.txt"
+            },
+            {
+              "marker": "[File: missing.txt]",
+              "path": "/tmp/missing.txt",
+              "id": "missing",
+              "name": "missing.txt"
+            }
+          ],
+          "frozenFiles": [
+            {
+              "id": "kept",
+              "marker": "[File: kept.txt]",
+              "path": "/tmp/kept.txt",
+              "name": "kept.txt",
+              "kind": "text",
+              "content": "body"
+            }
+          ],
+          "unfrozenFiles": [
+            {
+              "marker": "[File: prior.txt]",
+              "path": "/tmp/prior.txt",
+              "id": "prior",
+              "name": "prior.txt"
+            },
+            {
+              "marker": "[File: missing.txt]",
+              "path": "/tmp/missing.txt",
+              "id": "missing",
+              "name": "missing.txt"
+            }
+          ]
+        }
+      ],
+      "queueHold": true
+    },
+    "file": {
+      "s1": {
+        "cwd": "/work",
+        "bash": [
+          {
+            "command": "! pwd",
+            "output": "/work\n",
+            "exclude": false,
+            "status": "complete",
+            "exitCode": 0,
+            "at": 12
+          }
+        ],
+        "queue": [
+          {
+            "text": "empty attachments",
+            "attachments": []
+          },
+          {
+            "text": "files",
+            "files": [
+              {
+                "marker": "[File: kept.txt]",
+                "path": "/tmp/kept.txt",
+                "id": "kept",
+                "name": "kept.txt"
+              },
+              {
+                "marker": "[File: missing.txt]",
+                "path": "/tmp/missing.txt",
+                "id": "missing",
+                "name": "missing.txt"
+              }
+            ],
+            "frozenFiles": [
+              {
+                "id": "kept",
+                "marker": "[File: kept.txt]",
+                "path": "/tmp/kept.txt",
+                "name": "kept.txt",
+                "kind": "text",
+                "content": "body"
+              }
+            ],
+            "unfrozenFiles": [
+              {
+                "marker": "[File: prior.txt]",
+                "path": "/tmp/prior.txt",
+                "id": "prior",
+                "name": "prior.txt"
+              },
+              {
+                "marker": "[File: missing.txt]",
+                "path": "/tmp/missing.txt",
+                "id": "missing",
+                "name": "missing.txt"
+              }
+            ]
+          }
+        ],
+        "queueHold": true,
+        "updatedAt": 3000
+      }
+    }
+  }
+}

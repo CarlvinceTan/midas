@@ -1,0 +1,448 @@
+{
+  "generator": "tools/parity/find-dist-patches.mjs",
+  "method": "pristine-control",
+  "control": "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui",
+  "note": "Files whose vendored dist differs from the pristine published build. For every entry here the dist is authoritative for the Go port; the other files can be transliterated from reference/pi-tui/src.",
+  "modules": {
+    "alt-screen-search.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "caeb48061f18bc8a"
+    },
+    "autocomplete.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "48330633e56e85a7"
+    },
+    "components/alt-screen-flash.js": {
+      "status": "patched",
+      "reconstruction": "differs",
+      "hash": "d73501c6250591f9",
+      "added": 3,
+      "removed": 3
+    },
+    "components/box.js": {
+      "status": "patched",
+      "reconstruction": "differs",
+      "hash": "316c4891e271efeb",
+      "added": 1,
+      "removed": 1
+    },
+    "components/cancellable-loader.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "bcffd5a1ea717014"
+    },
+    "components/editor.js": {
+      "status": "patched",
+      "reconstruction": "differs",
+      "hash": "2d149b55fc42a960",
+      "added": 467,
+      "removed": 86
+    },
+    "components/h-stack.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "22dd36f66c92bbb6"
+    },
+    "components/image.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "d3feacd1555b143f"
+    },
+    "components/input.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "3d5a6372fd78183c"
+    },
+    "components/loader.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "31df75f668568b3c"
+    },
+    "components/markdown.js": {
+      "status": "patched",
+      "reconstruction": "differs",
+      "hash": "21e643772d39c9fd",
+      "added": 4,
+      "removed": 4
+    },
+    "components/mouse-region.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "aa0d4bd5a6db2130"
+    },
+    "components/scroll-view.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "ae6ce9821ba14841"
+    },
+    "components/select-list.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "63cced3511c906bf"
+    },
+    "components/settings-list.js": {
+      "status": "patched",
+      "reconstruction": "differs",
+      "hash": "a1e26a497a72d710",
+      "added": 23,
+      "removed": 2
+    },
+    "components/spacer.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "23b8180b8de5defe"
+    },
+    "components/stack.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "da5d5e967ba7a917"
+    },
+    "components/text.js": {
+      "status": "patched",
+      "reconstruction": "differs",
+      "hash": "d1bcfa3c33293f3d",
+      "added": 1,
+      "removed": 1
+    },
+    "components/truncated-text.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "6355d0e3255419e9"
+    },
+    "components/v-stack.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "108151500abb6ab4"
+    },
+    "editor-component.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "2e29cd9a98755c46"
+    },
+    "fuzzy.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "50cab64463bcbab5"
+    },
+    "index.js": {
+      "status": "patched",
+      "reconstruction": "differs",
+      "hash": "69673d20668c6b40",
+      "added": 1,
+      "removed": 0
+    },
+    "keybindings.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "83f11033b99176b8"
+    },
+    "keys.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "c8c033f0800ab1c0"
+    },
+    "kill-ring.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "6a862b910aead531"
+    },
+    "latex.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "e0f8fd20630f8991"
+    },
+    "layout-node.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "39af4276d4897fc2"
+    },
+    "layout.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "3ed425f359cc2dc6"
+    },
+    "native-modifiers.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "7cea22be21ea0e25"
+    },
+    "native-module-path.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "f139cc58369e06b5"
+    },
+    "stdin-buffer.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "b57df46fefaa375c"
+    },
+    "terminal-colors.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "eeb4f49c16eb9125"
+    },
+    "terminal-image.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "2a9b8e473a82552f"
+    },
+    "terminal.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "5eb01bf92872b8dc"
+    },
+    "tui-alt-screen.js": {
+      "status": "patched",
+      "reconstruction": "differs",
+      "hash": "69c8e9934cfc28e1",
+      "added": 30,
+      "removed": 7
+    },
+    "tui-main-screen.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "6a3e9a812d504f75"
+    },
+    "tui.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "7cb40e52f913faff"
+    },
+    "undo-stack.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "7bb3142a4024d028"
+    },
+    "utils.js": {
+      "status": "patched",
+      "reconstruction": "differs",
+      "hash": "3e1d001a805ec353",
+      "added": 13,
+      "removed": 1
+    },
+    "word-navigation.js": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "7da0feb8fde96902"
+    },
+    "alt-screen-search.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "421b63cc819b14b9"
+    },
+    "autocomplete.d.ts": {
+      "status": "upstream",
+      "reconstruction": "differs",
+      "hash": "c9dbda3cd068a3e0"
+    },
+    "components/alt-screen-flash.d.ts": {
+      "status": "patched",
+      "reconstruction": "identical",
+      "hash": "5e5bc1e0d6d41a60",
+      "added": 1,
+      "removed": 1
+    },
+    "components/box.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "ca4bc9a2061d430e"
+    },
+    "components/cancellable-loader.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "d04bd59d400d5f5a"
+    },
+    "components/editor.d.ts": {
+      "status": "patched",
+      "reconstruction": "identical",
+      "hash": "638cef30ef318dcd",
+      "added": 69,
+      "removed": 1
+    },
+    "components/h-stack.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "fd7c595e43eb744c"
+    },
+    "components/image.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "e53b114e6b4b282e"
+    },
+    "components/input.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "ef70110bb54dae82"
+    },
+    "components/loader.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "6063331ddc22c833"
+    },
+    "components/markdown.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "a556627be2d91806"
+    },
+    "components/mouse-region.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "5852d347671433a5"
+    },
+    "components/scroll-view.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "d770d2be80ae59a9"
+    },
+    "components/select-list.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "1bff3d9f6805bb6e"
+    },
+    "components/settings-list.d.ts": {
+      "status": "patched",
+      "reconstruction": "identical",
+      "hash": "ddba217c6c7f2f15",
+      "added": 2,
+      "removed": 0
+    },
+    "components/spacer.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "f7878130cacd73e4"
+    },
+    "components/stack.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "1e08b244b529c3f9"
+    },
+    "components/text.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "b89b88af1e57bc8a"
+    },
+    "components/truncated-text.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "4b2b18ca4b41daf0"
+    },
+    "components/v-stack.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "c8a73e0cfb4b2233"
+    },
+    "editor-component.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "dfc4ca0e9e26e0d3"
+    },
+    "fuzzy.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "eaeaa4ce387cd96b"
+    },
+    "index.d.ts": {
+      "status": "patched",
+      "reconstruction": "identical",
+      "hash": "b54df019c7a8df52",
+      "added": 1,
+      "removed": 0
+    },
+    "keybindings.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "b14876334a6748e2"
+    },
+    "keys.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "1042093ba2a064f9"
+    },
+    "kill-ring.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "50b51cc724bd7d77"
+    },
+    "latex.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "7a26832886e45103"
+    },
+    "layout-node.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "5a40eb346cbf3a84"
+    },
+    "layout.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "8c5515762055d548"
+    },
+    "native-modifiers.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "d0ae58d47a0accfc"
+    },
+    "native-module-path.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "d0024c55fd8e7e9d"
+    },
+    "stdin-buffer.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "9c4cccf79d190a1a"
+    },
+    "terminal-colors.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "7d1c9a3ab4cbefce"
+    },
+    "terminal-image.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "bc3964e6670894c0"
+    },
+    "terminal.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "a917fa00e58a4eb1"
+    },
+    "tui-alt-screen.d.ts": {
+      "status": "patched",
+      "reconstruction": "identical",
+      "hash": "af302981db5a6abf",
+      "added": 1,
+      "removed": 1
+    },
+    "tui-main-screen.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "0bb2485b0abb38f6"
+    },
+    "tui.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "118629d080df6d2e"
+    },
+    "undo-stack.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "015b4bd96e900752"
+    },
+    "utils.d.ts": {
+      "status": "patched",
+      "reconstruction": "identical",
+      "hash": "0f4507001e5445bf",
+      "added": 1,
+      "removed": 0
+    },
+    "word-navigation.d.ts": {
+      "status": "upstream",
+      "reconstruction": "identical",
+      "hash": "094605ca725e4b55"
+    }
+  }
+}

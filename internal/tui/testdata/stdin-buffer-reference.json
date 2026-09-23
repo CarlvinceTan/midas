@@ -1,0 +1,202 @@
+{
+  "cases": [
+    {
+      "name": "plain-unicode",
+      "chunks": [
+        "ab界"
+      ],
+      "options": {},
+      "waitMs": 0,
+      "events": [
+        {
+          "type": "data",
+          "data": "a"
+        },
+        {
+          "type": "data",
+          "data": "b"
+        },
+        {
+          "type": "data",
+          "data": "界"
+        }
+      ],
+      "remainder": ""
+    },
+    {
+      "name": "fragmented-csi-mouse",
+      "chunks": [
+        "\u001b",
+        "[<35;20",
+        ";5m"
+      ],
+      "options": {},
+      "waitMs": 0,
+      "events": [
+        {
+          "type": "data",
+          "data": "\u001b[<35;20;5m"
+        }
+      ],
+      "remainder": ""
+    },
+    {
+      "name": "osc-dcs-apc-ss3",
+      "chunks": [
+        "\u001b]11;rgb:aa/bb/cc\u0007\u001bP>|v1\u001b\\\u001b_Gi=1;OK\u001b\\\u001bOA"
+      ],
+      "options": {},
+      "waitMs": 0,
+      "events": [
+        {
+          "type": "data",
+          "data": "\u001b]11;rgb:aa/bb/cc\u0007"
+        },
+        {
+          "type": "data",
+          "data": "\u001bP>|v1\u001b\\"
+        },
+        {
+          "type": "data",
+          "data": "\u001b_Gi=1;OK\u001b\\"
+        },
+        {
+          "type": "data",
+          "data": "\u001bOA"
+        }
+      ],
+      "remainder": ""
+    },
+    {
+      "name": "legacy-x10",
+      "chunks": [
+        "\u001b[M",
+        "`()"
+      ],
+      "options": {},
+      "waitMs": 0,
+      "events": [
+        {
+          "type": "data",
+          "data": "\u001b[M`()"
+        }
+      ],
+      "remainder": ""
+    },
+    {
+      "name": "paste-and-remaining",
+      "chunks": [
+        "x\u001b[200~hello",
+        "\nworld\u001b[201~y"
+      ],
+      "options": {},
+      "waitMs": 0,
+      "events": [
+        {
+          "type": "data",
+          "data": "x"
+        },
+        {
+          "type": "paste",
+          "data": "hello\nworld"
+        },
+        {
+          "type": "data",
+          "data": "y"
+        }
+      ],
+      "remainder": ""
+    },
+    {
+      "name": "partial-before-paste",
+      "chunks": [
+        "\u001b\u001b[200~hello\u001b[201~"
+      ],
+      "options": {},
+      "waitMs": 0,
+      "events": [
+        {
+          "type": "paste",
+          "data": "hello"
+        }
+      ],
+      "remainder": ""
+    },
+    {
+      "name": "wezterm-double-escape",
+      "chunks": [
+        "\u001b\u001b[27;1:3u"
+      ],
+      "options": {},
+      "waitMs": 0,
+      "events": [
+        {
+          "type": "data",
+          "data": "\u001b"
+        },
+        {
+          "type": "data",
+          "data": "\u001b[27;1:3u"
+        }
+      ],
+      "remainder": ""
+    },
+    {
+      "name": "kitty-duplicate-printable",
+      "chunks": [
+        "\u001b[97u",
+        "a",
+        "b"
+      ],
+      "options": {},
+      "waitMs": 0,
+      "events": [
+        {
+          "type": "data",
+          "data": "\u001b[97u"
+        },
+        {
+          "type": "data",
+          "data": "b"
+        }
+      ],
+      "remainder": ""
+    },
+    {
+      "name": "escape-timeout",
+      "chunks": [
+        "\u001b"
+      ],
+      "options": {
+        "escapeTimeout": 5,
+        "timeout": 5
+      },
+      "waitMs": 20,
+      "events": [
+        {
+          "type": "data",
+          "data": "\u001b"
+        }
+      ],
+      "remainder": ""
+    },
+    {
+      "name": "sequence-timeout",
+      "chunks": [
+        "\u001b[<35;2"
+      ],
+      "options": {
+        "escapeTimeout": 5,
+        "timeout": 5
+      },
+      "waitMs": 20,
+      "events": [
+        {
+          "type": "data",
+          "data": "\u001b[<35;2"
+        }
+      ],
+      "remainder": ""
+    }
+  ]
+}

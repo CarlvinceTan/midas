@@ -1,0 +1,22 @@
+# The end-to-end image needs the Go sources and the module files, and nothing of
+# the developer's checkout: history, local binaries, and agent configuration only
+# make the build context bigger.
+.git
+.github
+.agents
+skills
+docs
+*.md
+# Binaries, which are gitignored because they are build output.
+/midas
+/midas-server
+/midas-lean
+/hub
+/mock-bridge
+/control
+/manager
+/vault
+/server
+*.test
+.DS_Store
+__pycache__

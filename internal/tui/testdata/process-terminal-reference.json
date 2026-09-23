@@ -1,0 +1,176 @@
+{
+  "scenarios": [
+    {
+      "name": "output-methods",
+      "output": "\u001b[2B\u001b[1A\u001b[?25l\u001b[?25h\u001b[K\u001b[J\u001b[2J\u001b[H\u001b]0;title\u0007\u001b]9;4;3\u0007\u001b]9;4;3\u0007\u001b]9;4;0\u0007payload",
+      "input": [],
+      "kitty": false,
+      "modifyOtherKeys": false
+    },
+    {
+      "name": "kitty-split",
+      "output": "\u001b[>4;2m\u001b[>4;0m",
+      "input": [
+        "a"
+      ],
+      "kitty": true,
+      "modifyOtherKeys": false
+    },
+    {
+      "name": "kitty-zero",
+      "output": "\u001b[>4;2m",
+      "input": [],
+      "kitty": false,
+      "modifyOtherKeys": true
+    },
+    {
+      "name": "invalid-split",
+      "output": "",
+      "input": [
+        "\u001b[",
+        "x"
+      ],
+      "kitty": false,
+      "modifyOtherKeys": false
+    },
+    {
+      "name": "prefix-timeout",
+      "output": "",
+      "input": [
+        "\u001b["
+      ],
+      "kitty": false,
+      "modifyOtherKeys": false
+    },
+    {
+      "name": "stop-inactive",
+      "output": "\u001b[?2004l",
+      "input": [],
+      "kitty": false,
+      "modifyOtherKeys": false
+    },
+    {
+      "name": "stop-progress",
+      "output": "\u001b]9;4;3\u0007\u001b]9;4;0\u0007\u001b[?2004l",
+      "input": [],
+      "kitty": false,
+      "modifyOtherKeys": false
+    }
+  ],
+  "parsedNegotiation": [
+    {
+      "input": "\u001b[?7u",
+      "result": {
+        "type": "kitty-flags",
+        "flags": 7
+      }
+    },
+    {
+      "input": "\u001b[?0u",
+      "result": {
+        "type": "kitty-flags",
+        "flags": 0
+      }
+    },
+    {
+      "input": "\u001b[?1;2c",
+      "result": {
+        "type": "device-attributes"
+      }
+    },
+    {
+      "input": "\u001b[?c",
+      "result": {
+        "type": "device-attributes"
+      }
+    },
+    {
+      "input": "\u001b[",
+      "result": null
+    },
+    {
+      "input": "a",
+      "result": null
+    }
+  ],
+  "escapeTimeouts": [
+    {
+      "name": "default",
+      "env": {},
+      "result": 10
+    },
+    {
+      "name": "configured",
+      "env": {
+        "MIDAS_TUI_ESC_TIMEOUT": "25"
+      },
+      "result": 25
+    },
+    {
+      "name": "fraction",
+      "env": {
+        "MIDAS_TUI_ESC_TIMEOUT": "1.5"
+      },
+      "result": 1.5
+    },
+    {
+      "name": "invalid",
+      "env": {
+        "MIDAS_TUI_ESC_TIMEOUT": "wat"
+      },
+      "result": 10
+    },
+    {
+      "name": "infinity",
+      "env": {
+        "MIDAS_TUI_ESC_TIMEOUT": "Infinity"
+      },
+      "result": 10
+    },
+    {
+      "name": "ssh",
+      "env": {
+        "SSH_CONNECTION": "host"
+      },
+      "result": 100
+    },
+    {
+      "name": "ssh-override",
+      "env": {
+        "SSH_TTY": "tty",
+        "MIDAS_TUI_ESC_TIMEOUT": "7"
+      },
+      "result": 7
+    }
+  ],
+  "normalizedShiftEnter": [
+    {
+      "name": "plain",
+      "input": "\r",
+      "detect": false,
+      "pressed": true,
+      "result": "\r"
+    },
+    {
+      "name": "shift",
+      "input": "\r",
+      "detect": true,
+      "pressed": true,
+      "result": "\u001b[13;2u"
+    },
+    {
+      "name": "not-pressed",
+      "input": "\r",
+      "detect": true,
+      "pressed": false,
+      "result": "\r"
+    },
+    {
+      "name": "other",
+      "input": "a",
+      "detect": true,
+      "pressed": true,
+      "result": "a"
+    }
+  ]
+}

@@ -1,0 +1,306 @@
+openapi: 3.1.0
+info:
+  title: Midas Agent API
+  version: "1"
+  description: |
+    Drive a Midas agent from outside the process.
+
+    A run is a single agent turn with tools. Start one, then read its event
+    stream: every record the agent produces is one line of `application/x-ndjson`
+    (or one `text/event-stream` message when the client asks for SSE). The record
+    shapes live in `events.schema.json`, and `pkg/protocol` is the Go source of
+    truth for both documents.
+
+    The contract is transport-free by design: `cmd/server` speaks it over stdio
+    today, and the routes below are what a serving frontend exposes. Midas keeps
+    no server state beyond the runs it is executing, so `GET /v1/runs/{runID}`
+    only answers for a run this process started.
+
+servers:
+  - url: http://127.0.0.1:8765
+    description: Default loopback listener for `midas-server --listen`.
+
+tags:
+  - name: runs
+    description: Start, steer, inspect, and stop agent runs.
+  - name: events
+    description: Follow a run's event stream.
+  - name: health
+    description: Liveness.
+
+paths:
+  /v1/health:
+    get:
+      operationId: getHealth
+      tags: [health]
+      summary: Liveness check
+      responses:
+        "200":
+          description: The process is serving.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+                  version:
+                    type: string
+                    description: Protocol version this server implements.
+
+  /v1/runs:
+    post:
+      operationId: startRun
+      tags: [runs]
+      summary: Start a run
+      description: |
+        Starts one agent run and answers with its descriptor. The run's events are
+        not in this response: follow them on `/v1/runs/{runID}/events`, which may
+        be opened before or after the run finishes (records are buffered until the
+        stream is consumed).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunRequest"
+      responses:
+        "202":
+          description: The run started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunInfo"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: The session already has a run in flight.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/runs/{runID}:
+    get:
+      operationId: getRun
+      tags: [runs]
+      summary: Describe a run
+      parameters:
+        - $ref: "#/components/parameters/runID"
+      responses:
+        "200":
+          description: The run's current state, including its usage summary once finished.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunInfo"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/runs/{runID}/steer:
+    post:
+      operationId: steerRun
+      tags: [runs]
+      summary: Steer a running run
+      description: |
+        Admits a message into a run that is already going, so the agent sees it
+        before its next turn instead of after it finishes.
+      parameters:
+        - $ref: "#/components/parameters/runID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SteerRequest"
+      responses:
+        "202":
+          description: The message was admitted.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The run is no longer accepting input.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/runs/{runID}/abort:
+    post:
+      operationId: abortRun
+      tags: [runs]
+      summary: Stop a run
+      description: |
+        Requests cancellation and answers immediately; the stream then ends with a
+        `run_finished` record whose status is `aborted`.
+      parameters:
+        - $ref: "#/components/parameters/runID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AbortRequest"
+      responses:
+        "202":
+          description: Cancellation was requested.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/runs/{runID}/events:
+    get:
+      operationId: streamRunEvents
+      tags: [events]
+      summary: Follow a run's events
+      description: |
+        Streams the run's records in order, then closes when the run finishes.
+
+        `application/x-ndjson` writes one JSON record per line. `text/event-stream`
+        writes the same records as SSE `data:` payloads. Either way the last record
+        is `run_finished`, and a client that reconnects is served from the
+        beginning of the run it asks for.
+      parameters:
+        - $ref: "#/components/parameters/runID"
+      responses:
+        "200":
+          description: The record stream.
+          content:
+            application/x-ndjson:
+              schema:
+                $ref: "events.schema.json#/$defs/Record"
+            text/event-stream:
+              schema:
+                type: string
+                description: One `data:` payload per record, each matching events.schema.json.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  parameters:
+    runID:
+      name: runID
+      in: path
+      required: true
+      schema:
+        type: string
+        examples: [run_01HZX8Q4]
+
+  responses:
+    BadRequest:
+      description: The request body was rejected.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: No such run on this server.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    RunRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+          description: The task for the agent.
+        sessionID:
+          type: string
+          description: Resume an existing session instead of starting a new one.
+        cwd:
+          type: string
+          description: Working directory for this run; defaults to the server's own.
+        model:
+          type: string
+          description: Model override as `provider/model`.
+        readOnly:
+          type: boolean
+          default: false
+          description: Expose only the inspection tools.
+        noCompact:
+          type: boolean
+          default: false
+          description: Disable context compaction for this run.
+
+    SteerRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: Message to admit into the running agent.
+
+    AbortRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: Optional note recorded with the cancellation.
+
+    RunStatus:
+      type: string
+      enum: [running, finished, failed, aborted]
+
+    RunInfo:
+      type: object
+      required: [id, status, startedAt]
+      properties:
+        id:
+          type: string
+        sessionID:
+          type: string
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        model:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        error:
+          type: string
+        summary:
+          $ref: "#/components/schemas/Summary"
+
+    Summary:
+      type: object
+      description: Run totals across every assistant turn.
+      properties:
+        calls:
+          type: integer
+        input:
+          type: integer
+          description: Uncached prompt tokens.
+        output:
+          type: integer
+        cacheRead:
+          type: integer
+          description: Prompt tokens served from the provider's cache.
+        cacheWrite:
+          type: integer
+        total:
+          type: integer
+        costUSD:
+          type: number
+        cacheHitRate:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string

@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://midas.local/api/events.schema.json",
+  "title": "Midas run event records",
+  "description": "One record per line of a run's event stream. Consumers switch on `type` and ignore unknown fields, so new fields and record types stay backward compatible. `pkg/protocol` is the Go definition; protocol_test.go fails when this file and the package disagree.",
+  "oneOf": [
+    { "$ref": "#/$defs/RunStarted" },
+    { "$ref": "#/$defs/Text" },
+    { "$ref": "#/$defs/ToolStart" },
+    { "$ref": "#/$defs/ToolEnd" },
+    { "$ref": "#/$defs/UsageRecord" },
+    { "$ref": "#/$defs/Notice" },
+    { "$ref": "#/$defs/Compaction" },
+    { "$ref": "#/$defs/RunFinished" }
+  ],
+  "$defs": {
+    "Record": {
+      "type": "object",
+      "required": ["v", "type"],
+      "properties": {
+        "v": { "const": "1", "description": "Protocol version." },
+        "type": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "UsageFields": {
+      "type": "object",
+      "required": ["input", "output", "cacheRead", "cacheWrite", "total"],
+      "properties": {
+        "input": { "type": "integer", "description": "Uncached prompt tokens." },
+        "output": { "type": "integer" },
+        "cacheRead": { "type": "integer", "description": "Prompt tokens served from the provider's cache." },
+        "cacheWrite": { "type": "integer" },
+        "total": { "type": "integer" },
+        "costUSD": { "type": "number" }
+      }
+    },
+    "Summary": {
+      "type": "object",
+      "required": ["calls", "input", "output", "cacheRead", "cacheWrite", "total", "cacheHitRate"],
+      "properties": {
+        "calls": { "type": "integer" },
+        "input": { "type": "integer" },
+        "output": { "type": "integer" },
+        "cacheRead": { "type": "integer" },
+        "cacheWrite": { "type": "integer" },
+        "total": { "type": "integer" },
+        "costUSD": { "type": "number" },
+        "cacheHitRate": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "RunStarted": {
+      "title": "run_started",
+      "type": "object",
+      "required": ["v", "type", "runID"],
+      "properties": {
+        "v": { "const": "1" },
+        "type": { "const": "run_started" },
+        "runID": { "type": "string" },
+        "sessionID": { "type": "string" },
+        "model": { "type": "string" }
+      }
+    },
+    "Text": {
+      "title": "text",
+      "type": "object",
+      "required": ["v", "type", "delta"],
+      "properties": {
+        "v": { "const": "1" },
+        "type": { "const": "text" },
+        "runID": { "type": "string" },
+        "delta": { "type": "string", "description": "Assistant text fragment, in stream order." }
+      }
+    },
+    "ToolStart": {
+      "title": "tool_start",
+      "type": "object",
+      "required": ["v", "type", "tool"],
+      "properties": {
+        "v": { "const": "1" },
+        "type": { "const": "tool_start" },
+        "runID": { "type": "string" },
+        "tool": { "type": "string" },
+        "callID": { "type": "string" }
+      }
+    },
+    "ToolEnd": {
+      "title": "tool_end",
+      "type": "object",
+      "required": ["v", "type", "tool"],
+      "properties": {
+        "v": { "const": "1" },
+        "type": { "const": "tool_end" },
+        "runID": { "type": "string" },
+        "tool": { "type": "string" },
+        "callID": { "type": "string" },
+        "isError": { "type": "boolean" }
+      }
+    },
+    "UsageRecord": {
+      "title": "usage",
+      "type": "object",
+      "required": ["v", "type", "usage"],
+      "properties": {
+        "v": { "const": "1" },
+        "type": { "const": "usage" },
+        "runID": { "type": "string" },
+        "usage": { "$ref": "#/$defs/UsageFields" }
+      }
+    },
+    "Notice": {
+      "title": "notice",
+      "type": "object",
+      "required": ["v", "type", "message"],
+      "properties": {
+        "v": { "const": "1" },
+        "type": { "const": "notice" },
+        "runID": { "type": "string" },
+        "message": { "type": "string", "description": "A short message about the run itself, such as a compaction." }
+      }
+    },
+    "Compaction": {
+      "title": "compaction",
+      "type": "object",
+      "required": ["v", "type", "tokensBefore", "tokensAfter"],
+      "properties": {
+        "v": { "const": "1" },
+        "type": { "const": "compaction" },
+        "runID": { "type": "string" },
+        "tokensBefore": { "type": "integer", "description": "Context size the checkpoint replaced." },
+        "tokensAfter": { "type": "integer", "description": "Context size afterwards." },
+        "failure": { "type": "string", "description": "Why the compaction could not be applied." }
+      }
+    },
+    "RunFinished": {
+      "title": "run_finished",
+      "type": "object",
+      "required": ["v", "type", "runID", "status"],
+      "properties": {
+        "v": { "const": "1" },
+        "type": { "const": "run_finished" },
+        "runID": { "type": "string" },
+        "status": { "enum": ["finished", "failed", "aborted"] },
+        "summary": { "$ref": "#/$defs/Summary" },
+        "failure": { "type": "string", "description": "Why the run failed or was aborted." }
+      }
+    }
+  }
+}

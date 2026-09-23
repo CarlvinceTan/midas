@@ -1,0 +1,524 @@
+{
+  "matchCases": [
+    {
+      "name": "empty",
+      "lines": [
+        "foo"
+      ],
+      "query": "   ",
+      "matches": [],
+      "keys": []
+    },
+    {
+      "name": "ascii-case-ansi",
+      "lines": [
+        "\u001b[31mFoo  bar\u001b[0m",
+        "baz.foo",
+        "foofoo"
+      ],
+      "query": "foo",
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        },
+        {
+          "segments": [
+            {
+              "row": 1,
+              "startCol": 4,
+              "endCol": 7
+            }
+          ]
+        },
+        {
+          "segments": [
+            {
+              "row": 2,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        },
+        {
+          "segments": [
+            {
+              "row": 2,
+              "startCol": 3,
+              "endCol": 6
+            }
+          ]
+        }
+      ],
+      "keys": [
+        "0:0:0:3",
+        "1:4:1:7",
+        "2:0:2:3",
+        "2:3:2:6"
+      ]
+    },
+    {
+      "name": "cross-whitespace",
+      "lines": [
+        "alpha  ",
+        "",
+        "\tbeta"
+      ],
+      "query": "alpha beta",
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 0,
+              "endCol": 5
+            },
+            {
+              "row": 2,
+              "startCol": 3,
+              "endCol": 7
+            }
+          ]
+        }
+      ],
+      "keys": [
+        "0:0:2:7"
+      ]
+    },
+    {
+      "name": "literal-punctuation",
+      "lines": [
+        "a.b axb A.B"
+      ],
+      "query": "a.b",
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        },
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 8,
+              "endCol": 11
+            }
+          ]
+        }
+      ],
+      "keys": [
+        "0:0:0:3",
+        "0:8:0:11"
+      ]
+    },
+    {
+      "name": "unicode-cells",
+      "lines": [
+        "A界é🙂Z"
+      ],
+      "query": "界é🙂",
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 1,
+              "endCol": 6
+            }
+          ]
+        }
+      ],
+      "keys": [
+        "0:1:0:6"
+      ]
+    },
+    {
+      "name": "combining-submatch",
+      "lines": [
+        "A界é🙂Z"
+      ],
+      "query": "́",
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 3,
+              "endCol": 4
+            }
+          ]
+        }
+      ],
+      "keys": [
+        "0:3:0:4"
+      ]
+    },
+    {
+      "name": "astral-prefix",
+      "lines": [
+        "🙂🙂 target"
+      ],
+      "query": "target",
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 5,
+              "endCol": 11
+            }
+          ]
+        }
+      ],
+      "keys": [
+        "0:5:0:11"
+      ]
+    },
+    {
+      "name": "bom-whitespace",
+      "lines": [
+        "one﻿two"
+      ],
+      "query": "one two",
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 0,
+              "endCol": 6
+            }
+          ]
+        }
+      ],
+      "keys": [
+        "0:0:0:6"
+      ]
+    },
+    {
+      "name": "nel-not-whitespace",
+      "lines": [
+        "onetwo"
+      ],
+      "query": "one two",
+      "matches": [],
+      "keys": []
+    }
+  ],
+  "indexSteps": [
+    {
+      "label": "initial",
+      "changed": true,
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        },
+        {
+          "segments": [
+            {
+              "row": 1,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "same",
+      "changed": false,
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        },
+        {
+          "segments": [
+            {
+              "row": 1,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "normalized-same",
+      "changed": false,
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        },
+        {
+          "segments": [
+            {
+              "row": 1,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "case-change",
+      "changed": true,
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        },
+        {
+          "segments": [
+            {
+              "row": 1,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "source-ansi-change",
+      "changed": true,
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 0,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        },
+        {
+          "segments": [
+            {
+              "row": 1,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "source-text-change",
+      "changed": true,
+      "matches": [
+        {
+          "segments": [
+            {
+              "row": 1,
+              "startCol": 0,
+              "endCol": 3
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "componentSteps": [
+    {
+      "label": "empty-width-1",
+      "width": 1,
+      "lines": [
+        "┌",
+        "│",
+        "└"
+      ],
+      "query": "",
+      "resultIndex": -1,
+      "resultCount": 0,
+      "previousButtonStart": -1,
+      "previousButtonEnd": -1,
+      "nextButtonStart": -1,
+      "nextButtonEnd": -1,
+      "queries": []
+    },
+    {
+      "label": "empty-width-16",
+      "width": 16,
+      "lines": [
+        "┌──────────────┐",
+        "│ \u001b_midas:c\u0007\u001b[7m\u001b[2mF\u001b[22m\u001b[27m\u001b[2mind in trans\u001b[0m\u001b[22m│",
+        "└──────── ↑ ↓ ─┘"
+      ],
+      "query": "",
+      "resultIndex": -1,
+      "resultCount": 0,
+      "previousButtonStart": 10,
+      "previousButtonEnd": 11,
+      "nextButtonStart": 12,
+      "nextButtonEnd": 13,
+      "directionAtPrevious": -1,
+      "directionAtNext": 1,
+      "queries": []
+    },
+    {
+      "label": "empty-width-32",
+      "width": 32,
+      "lines": [
+        "┌──────────────────────────────┐",
+        "│ \u001b_midas:c\u0007\u001b[7m\u001b[2mF\u001b[22m\u001b[27m\u001b[2mind in transcript\u001b[22m           │",
+        "└──── ↑ Shift+Enter · ↓ Enter ─┘"
+      ],
+      "query": "",
+      "resultIndex": -1,
+      "resultCount": 0,
+      "previousButtonStart": 6,
+      "previousButtonEnd": 19,
+      "nextButtonStart": 22,
+      "nextButtonEnd": 29,
+      "directionAtPrevious": -1,
+      "directionAtNext": 1,
+      "queries": []
+    },
+    {
+      "label": "query-results",
+      "width": 40,
+      "lines": [
+        "┌──────────────────────────────────────┐",
+        "│ Foo\u001b_midas:c\u0007\u001b[7m \u001b[27m                            \u001b[2m 2/4 \u001b[22m│",
+        "└──────────── ↑ Shift+Enter · ↓ Enter ─┘"
+      ],
+      "query": "Foo",
+      "resultIndex": 1,
+      "resultCount": 4,
+      "previousButtonStart": 14,
+      "previousButtonEnd": 27,
+      "nextButtonStart": 30,
+      "nextButtonEnd": 37,
+      "directionAtPrevious": -1,
+      "directionAtNext": 1,
+      "queries": [
+        "Foo"
+      ]
+    },
+    {
+      "label": "edit",
+      "width": 40,
+      "lines": [
+        "┌──────────────────────────────────────┐",
+        "│ F\u001b_midas:c\u0007\u001b[7mo\u001b[27m                              \u001b[2m 2/4 \u001b[22m│",
+        "└──────────── ↑ Shift+Enter · ↓ Enter ─┘"
+      ],
+      "query": "Fo",
+      "resultIndex": 1,
+      "resultCount": 4,
+      "previousButtonStart": 14,
+      "previousButtonEnd": 27,
+      "nextButtonStart": 30,
+      "nextButtonEnd": 37,
+      "directionAtPrevious": -1,
+      "directionAtNext": 1,
+      "queries": [
+        "Foo",
+        "Fo"
+      ]
+    },
+    {
+      "label": "paste-no-matches",
+      "width": 24,
+      "lines": [
+        "┌──────────────────────┐",
+        "│ ab    c \u001b_midas:c\u0007\u001b[7mo\u001b[27m\u001b[2m No matches \u001b[22m│",
+        "└──────────────── ↑ ↓ ─┘"
+      ],
+      "query": "F ab    c o",
+      "resultIndex": -1,
+      "resultCount": 0,
+      "previousButtonStart": 18,
+      "previousButtonEnd": 19,
+      "nextButtonStart": 20,
+      "nextButtonEnd": 21,
+      "directionAtPrevious": -1,
+      "directionAtNext": 1,
+      "queries": [
+        "Foo",
+        "Fo",
+        "F ab    c o"
+      ]
+    },
+    {
+      "label": "hover-previous",
+      "width": 40,
+      "lines": [
+        "┌──────────────────────────────────────┐",
+        "│ F ab    c \u001b_midas:c\u0007\u001b[7mo\u001b[27m              \u001b[2m No matches \u001b[22m│",
+        "└──────────── <↑ Shift+Enter> · ↓ Enter ─┘"
+      ],
+      "query": "F ab    c o",
+      "resultIndex": -1,
+      "resultCount": 0,
+      "previousButtonStart": 14,
+      "previousButtonEnd": 27,
+      "nextButtonStart": 30,
+      "nextButtonEnd": 37,
+      "directionAtPrevious": -1,
+      "directionAtNext": 1,
+      "queries": [
+        "Foo",
+        "Fo",
+        "F ab    c o"
+      ]
+    },
+    {
+      "label": "hover-next",
+      "width": 40,
+      "lines": [
+        "┌──────────────────────────────────────┐",
+        "│ F ab    c \u001b_midas:c\u0007\u001b[7mo\u001b[27m              \u001b[2m No matches \u001b[22m│",
+        "└──────────── ↑ Shift+Enter · <↓ Enter> ─┘"
+      ],
+      "query": "F ab    c o",
+      "resultIndex": -1,
+      "resultCount": 0,
+      "previousButtonStart": 14,
+      "previousButtonEnd": 27,
+      "nextButtonStart": 30,
+      "nextButtonEnd": 37,
+      "directionAtPrevious": -1,
+      "directionAtNext": 1,
+      "queries": [
+        "Foo",
+        "Fo",
+        "F ab    c o"
+      ]
+    }
+  ]
+}

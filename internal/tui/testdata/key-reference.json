@@ -1,0 +1,555 @@
+{
+  "generator": "tools/parity/gen-key-goldens.mjs",
+  "node": "v22.23.1",
+  "candidates": [
+    "escape",
+    "enter",
+    "shift+enter",
+    "alt+enter",
+    "tab",
+    "shift+tab",
+    "space",
+    "ctrl+space",
+    "alt+space",
+    "backspace",
+    "ctrl+backspace",
+    "alt+backspace",
+    "insert",
+    "delete",
+    "home",
+    "end",
+    "pageUp",
+    "pageDown",
+    "up",
+    "down",
+    "left",
+    "right",
+    "shift+up",
+    "ctrl+up",
+    "ctrl+shift+up",
+    "alt+left",
+    "ctrl+right",
+    "f1",
+    "f2",
+    "f5",
+    "f12",
+    "a",
+    "shift+a",
+    "ctrl+a",
+    "alt+a",
+    "ctrl+alt+a",
+    "super+a",
+    "c",
+    "ctrl+c",
+    "ctrl+k",
+    "ctrl+v",
+    "ctrl+/",
+    "ctrl+shift+d",
+    "ctrl+-",
+    "0",
+    ".",
+    "+"
+  ],
+  "cases": [
+    {
+      "name": "escape",
+      "data": "\u001b",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "escape"
+      ]
+    },
+    {
+      "name": "enter-cr",
+      "data": "\r",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "enter"
+      ]
+    },
+    {
+      "name": "enter-lf-legacy",
+      "data": "\n",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "enter"
+      ]
+    },
+    {
+      "name": "shift-tab",
+      "data": "\u001b[Z",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "shift+tab"
+      ]
+    },
+    {
+      "name": "legacy-up",
+      "data": "\u001b[A",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "up"
+      ]
+    },
+    {
+      "name": "legacy-app-up",
+      "data": "\u001bOA",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "up"
+      ]
+    },
+    {
+      "name": "legacy-home",
+      "data": "\u001b[7~",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "home"
+      ]
+    },
+    {
+      "name": "legacy-page-up",
+      "data": "\u001b[[5~",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "pageUp"
+      ]
+    },
+    {
+      "name": "legacy-shift-up",
+      "data": "\u001b[a",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "shift+up"
+      ]
+    },
+    {
+      "name": "legacy-ctrl-up",
+      "data": "\u001bOa",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+up"
+      ]
+    },
+    {
+      "name": "legacy-alt-left",
+      "data": "\u001bb",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "alt+left"
+      ]
+    },
+    {
+      "name": "legacy-ctrl-right",
+      "data": "\u001b[1;5C",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+right"
+      ]
+    },
+    {
+      "name": "f1",
+      "data": "\u001bOP",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "f1"
+      ]
+    },
+    {
+      "name": "f5",
+      "data": "\u001b[[E",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "f5"
+      ]
+    },
+    {
+      "name": "f12",
+      "data": "\u001b[24~",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "f12"
+      ]
+    },
+    {
+      "name": "raw-a",
+      "data": "a",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "a"
+      ]
+    },
+    {
+      "name": "raw-shift-a",
+      "data": "A",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "shift+a"
+      ]
+    },
+    {
+      "name": "raw-ctrl-a",
+      "data": "\u0001",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+a"
+      ]
+    },
+    {
+      "name": "raw-alt-a",
+      "data": "\u001ba",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "alt+a"
+      ]
+    },
+    {
+      "name": "raw-ctrl-alt-a",
+      "data": "\u001b\u0001",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+alt+a"
+      ]
+    },
+    {
+      "name": "raw-ctrl-minus",
+      "data": "\u001f",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+-"
+      ]
+    },
+    {
+      "name": "kitty-a",
+      "data": "\u001b[97u",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "a"
+      ]
+    },
+    {
+      "name": "kitty-a-release",
+      "data": "\u001b[97;1:3u",
+      "kitty": false,
+      "environment": "default",
+      "release": true,
+      "matches": [
+        "a"
+      ]
+    },
+    {
+      "name": "kitty-shift-a",
+      "data": "\u001b[65;2u",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "shift+a"
+      ]
+    },
+    {
+      "name": "kitty-ctrl-c-lock",
+      "data": "\u001b[99;69u",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+c"
+      ]
+    },
+    {
+      "name": "kitty-modified-up",
+      "data": "\u001b[1;6A",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+shift+up"
+      ]
+    },
+    {
+      "name": "kitty-page-release",
+      "data": "\u001b[5;1:3~",
+      "kitty": false,
+      "environment": "default",
+      "release": true,
+      "matches": [
+        "pageUp"
+      ]
+    },
+    {
+      "name": "kitty-home",
+      "data": "\u001b[1;1H",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "home"
+      ]
+    },
+    {
+      "name": "kitty-keypad-zero",
+      "data": "\u001b[57399u",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "0"
+      ]
+    },
+    {
+      "name": "kitty-keypad-plus",
+      "data": "\u001b[57413u",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": []
+    },
+    {
+      "name": "kitty-nonlatin-base",
+      "data": "\u001b[1089::99;5u",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+c"
+      ]
+    },
+    {
+      "name": "kitty-latin-authoritative",
+      "data": "\u001b[107::118;5u",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+k"
+      ]
+    },
+    {
+      "name": "kitty-symbol-authoritative",
+      "data": "\u001b[47::91;5u",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+/"
+      ]
+    },
+    {
+      "name": "modify-ctrl-c",
+      "data": "\u001b[27;5;99~",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "ctrl+c"
+      ]
+    },
+    {
+      "name": "modify-shift-a",
+      "data": "\u001b[27;2;65~",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "shift+a"
+      ]
+    },
+    {
+      "name": "paste-release-lookalike",
+      "data": "\u001b[200~90:62:3F:A5\u001b[201~",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": []
+    },
+    {
+      "name": "kitty-active-newline",
+      "data": "\n",
+      "kitty": true,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "shift+enter"
+      ]
+    },
+    {
+      "name": "kitty-active-shift-enter-map",
+      "data": "\u001b\r",
+      "kitty": true,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "shift+enter"
+      ]
+    },
+    {
+      "name": "legacy-alt-enter",
+      "data": "\u001b\r",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "alt+enter"
+      ]
+    },
+    {
+      "name": "legacy-backspace-bs",
+      "data": "\b",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "backspace"
+      ]
+    },
+    {
+      "name": "windows-ctrl-backspace",
+      "data": "\b",
+      "kitty": false,
+      "environment": "windows",
+      "release": false,
+      "matches": [
+        "ctrl+backspace"
+      ]
+    },
+    {
+      "name": "windows-ssh-backspace",
+      "data": "\b",
+      "kitty": false,
+      "environment": "windows-ssh",
+      "release": false,
+      "matches": [
+        "backspace"
+      ]
+    },
+    {
+      "name": "delete-char",
+      "data": "",
+      "kitty": false,
+      "environment": "default",
+      "release": false,
+      "matches": [
+        "backspace"
+      ]
+    }
+  ],
+  "registry": [
+    {
+      "label": "initial",
+      "first": [],
+      "second": [
+        "x"
+      ],
+      "third": [
+        "x"
+      ],
+      "conflicts": [
+        {
+          "key": "x",
+          "keybindings": [
+            "second",
+            "third"
+          ]
+        }
+      ],
+      "user": {
+        "first": [],
+        "second": [
+          "x",
+          "x"
+        ],
+        "third": [
+          "x"
+        ],
+        "unknown": [
+          "z"
+        ]
+      },
+      "resolved": {
+        "first": [],
+        "second": [
+          "x"
+        ],
+        "third": [
+          "x"
+        ]
+      },
+      "matchesX": [
+        "second",
+        "third"
+      ]
+    },
+    {
+      "label": "updated",
+      "first": [
+        "ctrl+c"
+      ],
+      "second": [
+        "b"
+      ],
+      "third": [],
+      "conflicts": [],
+      "user": {
+        "first": [
+          "ctrl+c",
+          "ctrl+c"
+        ]
+      },
+      "resolved": {
+        "first": [
+          "ctrl+c"
+        ],
+        "second": [
+          "b"
+        ],
+        "third": []
+      },
+      "matchesX": []
+    }
+  ]
+}

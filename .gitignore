@@ -1,6 +1,29 @@
-node_modules/
 .DS_Store
 *.log
 .env
 .env.*
 __pycache__/
+
+# Go build output
+/midas
+/midas-server
+/midas-lean
+/hub
+/mock-bridge
+/control
+/manager
+/vault
+/server
+/cmd/midas/midas
+/cmd/server/server
+# Test binaries and profiles
+*.test
+*.prof
+coverage.out
+
+# Local secrets and scratch state
+*.kdbx
+*.kdbx.lock
+# A vault write goes through a temporary file beside the database, which a crash
+# can leave behind.
+.vault-*

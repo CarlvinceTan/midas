@@ -1,0 +1,2352 @@
+{
+  "generator": "tools/parity/gen-tui-core-goldens.mjs",
+  "node": "v22.23.1",
+  "mouse": [
+    {
+      "name": "undefined",
+      "event": {
+        "type": "click",
+        "button": "left",
+        "x": 2,
+        "y": 1,
+        "screenX": 12,
+        "screenY": 7,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      },
+      "result": {
+        "found": false
+      },
+      "received": {
+        "type": "click",
+        "button": "left",
+        "x": 2,
+        "y": 1,
+        "screenX": 12,
+        "screenY": 7,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      }
+    },
+    {
+      "name": "render-only",
+      "event": {
+        "type": "click",
+        "button": "left",
+        "x": 2,
+        "y": 1,
+        "screenX": 12,
+        "screenY": 7,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      },
+      "result": {
+        "found": false
+      },
+      "received": {
+        "type": "click",
+        "button": "left",
+        "x": 2,
+        "y": 1,
+        "screenX": 12,
+        "screenY": 7,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      }
+    },
+    {
+      "name": "handled",
+      "event": {
+        "type": "click",
+        "button": "left",
+        "x": 2,
+        "y": 1,
+        "screenX": 12,
+        "screenY": 7,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      },
+      "result": {
+        "found": true,
+        "handled": true,
+        "capture": false,
+        "focus": false,
+        "render": false,
+        "targetId": "direct-handled",
+        "originX": 10,
+        "originY": 6,
+        "width": 10,
+        "height": 4,
+        "focusTargetId": ""
+      },
+      "received": {
+        "type": "click",
+        "button": "left",
+        "x": 2,
+        "y": 1,
+        "screenX": 12,
+        "screenY": 7,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      }
+    },
+    {
+      "name": "capture-implies-handled",
+      "event": {
+        "type": "click",
+        "button": "left",
+        "x": 2,
+        "y": 1,
+        "screenX": 12,
+        "screenY": 7,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      },
+      "result": {
+        "found": true,
+        "handled": true,
+        "capture": true,
+        "focus": false,
+        "render": null,
+        "targetId": "direct-capture-implies-handled",
+        "originX": 10,
+        "originY": 6,
+        "width": 10,
+        "height": 4,
+        "focusTargetId": ""
+      },
+      "received": {
+        "type": "click",
+        "button": "left",
+        "x": 2,
+        "y": 1,
+        "screenX": 12,
+        "screenY": 7,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      }
+    },
+    {
+      "name": "focus-implies-handled",
+      "event": {
+        "type": "click",
+        "button": "left",
+        "x": 2,
+        "y": 1,
+        "screenX": 12,
+        "screenY": 7,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      },
+      "result": {
+        "found": true,
+        "handled": true,
+        "capture": false,
+        "focus": true,
+        "render": null,
+        "targetId": "direct-focus-implies-handled",
+        "originX": 10,
+        "originY": 6,
+        "width": 10,
+        "height": 4,
+        "focusTargetId": "direct-focus-implies-handled"
+      },
+      "received": {
+        "type": "click",
+        "button": "left",
+        "x": 2,
+        "y": 1,
+        "screenX": 12,
+        "screenY": 7,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      }
+    },
+    {
+      "name": "container-child-transform",
+      "event": {
+        "type": "click",
+        "button": "left",
+        "x": -2,
+        "y": 2,
+        "screenX": 20,
+        "screenY": 30,
+        "width": 8,
+        "height": 3,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      },
+      "result": {
+        "found": true,
+        "handled": true,
+        "capture": false,
+        "focus": true,
+        "render": false,
+        "targetId": "second",
+        "originX": 22,
+        "originY": 30,
+        "width": 8,
+        "height": 1,
+        "focusTargetId": "second"
+      },
+      "received": {
+        "type": "click",
+        "button": "left",
+        "x": -2,
+        "y": 0,
+        "screenX": 20,
+        "screenY": 30,
+        "width": 8,
+        "height": 1,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      }
+    },
+    {
+      "name": "container-focus-delegation",
+      "event": {
+        "type": "click",
+        "button": "left",
+        "x": 1,
+        "y": 0,
+        "screenX": 4,
+        "screenY": 5,
+        "width": 6,
+        "height": 1,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      },
+      "result": {
+        "found": true,
+        "handled": true,
+        "capture": false,
+        "focus": true,
+        "render": null,
+        "targetId": "focus-child",
+        "originX": 3,
+        "originY": 5,
+        "width": 6,
+        "height": 1,
+        "focusTargetId": "input-container"
+      },
+      "received": {
+        "type": "click",
+        "button": "left",
+        "x": 1,
+        "y": 0,
+        "screenX": 4,
+        "screenY": 5,
+        "width": 6,
+        "height": 1,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      }
+    },
+    {
+      "name": "box-content-transform",
+      "event": {
+        "type": "click",
+        "button": "left",
+        "x": 3,
+        "y": 2,
+        "screenX": 13,
+        "screenY": 12,
+        "width": 10,
+        "height": 4,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      },
+      "result": {
+        "found": true,
+        "handled": true,
+        "capture": true,
+        "focus": false,
+        "render": null,
+        "targetId": "box-child",
+        "originX": 12,
+        "originY": 11,
+        "width": 6,
+        "height": 2,
+        "focusTargetId": ""
+      },
+      "received": {
+        "type": "click",
+        "button": "left",
+        "x": 1,
+        "y": 1,
+        "screenX": 13,
+        "screenY": 12,
+        "width": 6,
+        "height": 2,
+        "shift": false,
+        "alt": false,
+        "ctrl": false
+      }
+    }
+  ],
+  "containers": [
+    {
+      "name": "concatenates-in-order",
+      "width": 7,
+      "out": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "name": "remove-first-identity-match",
+      "width": 5,
+      "out": [
+        "o",
+        "d"
+      ]
+    }
+  ],
+  "boxes": [
+    {
+      "name": "empty",
+      "width": 10,
+      "out": []
+    },
+    {
+      "name": "empty-child",
+      "width": 10,
+      "out": []
+    },
+    {
+      "name": "patched-content-markers",
+      "width": 10,
+      "out": [
+        "          ",
+        " \u001b]777;midas-content-start\u0007hi\u001b]777;midas-content-end\u0007       ",
+        " \u001b]777;midas-content-start\u0007world\u001b]777;midas-content-end\u0007    ",
+        "          "
+      ]
+    },
+    {
+      "name": "does-not-truncate",
+      "width": 5,
+      "out": [
+        "\u001b]777;midas-content-start\u0007over-wide-value\u001b]777;midas-content-end\u0007"
+      ]
+    },
+    {
+      "name": "background-and-wide-text",
+      "width": 12,
+      "out": [
+        "\u001b[44m            \u001b[49m",
+        "\u001b[44m  \u001b]777;midas-content-start\u0007\u001b[31mred\u001b[0m\u001b]777;midas-content-end\u0007       \u001b[49m",
+        "\u001b[44m  \u001b]777;midas-content-start\u0007你\u001b]777;midas-content-end\u0007        \u001b[49m",
+        "\u001b[44m            \u001b[49m"
+      ]
+    },
+    {
+      "name": "cache-sample",
+      "width": 9,
+      "out": [
+        "< \u001b]777;midas-content-start\u0007cached\u001b]777;midas-content-end\u0007  >"
+      ],
+      "first": [
+        "< \u001b]777;midas-content-start\u0007cached\u001b]777;midas-content-end\u0007  >"
+      ],
+      "childRenderCalls": 2,
+      "bgCalls": 3
+    }
+  ],
+  "spacer": [
+    {
+      "lines": -2,
+      "out": []
+    },
+    {
+      "lines": 0,
+      "out": []
+    },
+    {
+      "lines": 1,
+      "out": [
+        ""
+      ]
+    },
+    {
+      "lines": 3,
+      "out": [
+        "",
+        "",
+        ""
+      ]
+    }
+  ],
+  "allocation": [
+    {
+      "name": "intrinsic-unbounded",
+      "entries": [
+        {},
+        {},
+        {}
+      ],
+      "intrinsic": [
+        2,
+        4,
+        1
+      ],
+      "available": null,
+      "gap": 0,
+      "out": [
+        2,
+        4,
+        1
+      ]
+    },
+    {
+      "name": "fixed-basis",
+      "entries": [
+        {
+          "basis": 3
+        },
+        {
+          "basis": 1
+        }
+      ],
+      "intrinsic": [
+        20,
+        20
+      ],
+      "available": null,
+      "gap": 0,
+      "out": [
+        3,
+        1
+      ]
+    },
+    {
+      "name": "negative-clamps",
+      "entries": [
+        {
+          "basis": -2,
+          "minSize": -4,
+          "maxSize": -1
+        }
+      ],
+      "intrinsic": [
+        9
+      ],
+      "available": 8,
+      "gap": 0,
+      "out": [
+        0
+      ]
+    },
+    {
+      "name": "min-greater-than-max",
+      "entries": [
+        {
+          "basis": 1,
+          "minSize": 5,
+          "maxSize": 2
+        }
+      ],
+      "intrinsic": [
+        1
+      ],
+      "available": 20,
+      "gap": 0,
+      "out": [
+        5
+      ]
+    },
+    {
+      "name": "gap-subtraction",
+      "entries": [
+        {
+          "grow": 1
+        },
+        {
+          "grow": 1
+        },
+        {
+          "grow": 1
+        }
+      ],
+      "intrinsic": [
+        1,
+        1,
+        1
+      ],
+      "available": 10,
+      "gap": 2,
+      "out": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "name": "grow-weighted",
+      "entries": [
+        {
+          "grow": 1
+        },
+        {
+          "grow": 2
+        },
+        {
+          "grow": 3
+        }
+      ],
+      "intrinsic": [
+        1,
+        1,
+        1
+      ],
+      "available": 17,
+      "gap": 0,
+      "out": [
+        5,
+        6,
+        6
+      ]
+    },
+    {
+      "name": "grow-with-max",
+      "entries": [
+        {
+          "grow": 1,
+          "maxSize": 2
+        },
+        {
+          "grow": 1
+        }
+      ],
+      "intrinsic": [
+        1,
+        1
+      ],
+      "available": 8,
+      "gap": 0,
+      "out": [
+        2,
+        6
+      ]
+    },
+    {
+      "name": "no-grow-candidates",
+      "entries": [
+        {},
+        {}
+      ],
+      "intrinsic": [
+        1,
+        1
+      ],
+      "available": 8,
+      "gap": 0,
+      "out": [
+        1,
+        1
+      ]
+    },
+    {
+      "name": "shrink-size-weighted",
+      "entries": [
+        {
+          "shrink": 1
+        },
+        {
+          "shrink": 1
+        },
+        {
+          "shrink": 2
+        }
+      ],
+      "intrinsic": [
+        8,
+        4,
+        4
+      ],
+      "available": 9,
+      "gap": 0,
+      "out": [
+        5,
+        2,
+        2
+      ]
+    },
+    {
+      "name": "shrink-with-min",
+      "entries": [
+        {
+          "shrink": 1,
+          "minSize": 7
+        },
+        {
+          "shrink": 1
+        }
+      ],
+      "intrinsic": [
+        8,
+        8
+      ],
+      "available": 9,
+      "gap": 0,
+      "out": [
+        7,
+        2
+      ]
+    },
+    {
+      "name": "no-shrink-candidates",
+      "entries": [
+        {
+          "shrink": 0
+        },
+        {
+          "shrink": 0
+        }
+      ],
+      "intrinsic": [
+        5,
+        5
+      ],
+      "available": 3,
+      "gap": 0,
+      "out": [
+        5,
+        5
+      ]
+    },
+    {
+      "name": "ordered-remainder",
+      "entries": [
+        {
+          "grow": 1
+        },
+        {
+          "grow": 1
+        },
+        {
+          "grow": 1
+        }
+      ],
+      "intrinsic": [
+        0,
+        0,
+        0
+      ],
+      "available": 5,
+      "gap": 0,
+      "out": [
+        2,
+        2,
+        1
+      ]
+    }
+  ],
+  "vstacks": [
+    {
+      "name": "basic-gap",
+      "width": 6,
+      "out": [
+        "a",
+        "aa",
+        "",
+        "b"
+      ]
+    },
+    {
+      "name": "basis-crop-pad",
+      "width": 8,
+      "out": [
+        "a0",
+        "b0",
+        "",
+        ""
+      ]
+    },
+    {
+      "name": "visibility-root-width",
+      "width": 12,
+      "out": [
+        "large"
+      ]
+    }
+  ],
+  "hstacks": [
+    {
+      "name": "basic-gap",
+      "width": 20,
+      "out": [
+        "\u001b[0m\u001b]8;;\u0007a:10:0    \u001b[0m\u001b]8;;\u0007 \u001b[0m\u001b]8;;\u0007b:9:0    \u001b[0m\u001b]8;;\u0007",
+        "\u001b[0m\u001b]8;;\u0007a:10:1    \u001b[0m\u001b]8;;\u0007          "
+      ],
+      "renderWidths": {
+        "a": [
+          20,
+          10
+        ],
+        "b": [
+          20,
+          9
+        ]
+      }
+    },
+    {
+      "name": "center-align",
+      "width": 8,
+      "out": [
+        "\u001b[0m\u001b]8;;\u0007a0\u001b[0m\u001b]8;;\u0007      ",
+        "\u001b[0m\u001b]8;;\u0007a1\u001b[0m\u001b]8;;\u0007 \u001b[0m\u001b]8;;\u0007b0\u001b[0m\u001b]8;;\u0007   ",
+        "\u001b[0m\u001b]8;;\u0007a2\u001b[0m\u001b]8;;\u0007      "
+      ]
+    },
+    {
+      "name": "end-align",
+      "width": 8,
+      "out": [
+        "\u001b[0m\u001b]8;;\u0007a0\u001b[0m\u001b]8;;\u0007      ",
+        "\u001b[0m\u001b]8;;\u0007a1\u001b[0m\u001b]8;;\u0007      ",
+        "\u001b[0m\u001b]8;;\u0007a2\u001b[0m\u001b]8;;\u0007b0\u001b[0m\u001b]8;;\u0007    "
+      ]
+    },
+    {
+      "name": "zero-width-child",
+      "width": 6,
+      "out": [
+        "\u001b[0m\u001b]8;;\u0007full:6\u001b[0m\u001b]8;;\u0007"
+      ],
+      "renderWidths": {
+        "zero": [
+          6
+        ],
+        "full": [
+          6,
+          6
+        ]
+      }
+    },
+    {
+      "name": "wide-and-ansi",
+      "width": 8,
+      "out": [
+        "\u001b[0m\u001b]8;;\u0007你好\u001b[0m\u001b]8;;\u0007\u001b[31mred\u001b[0m \u001b[0m\u001b]8;;\u0007"
+      ]
+    }
+  ],
+  "composite": [
+    {
+      "base": "",
+      "overlay": "x",
+      "startCol": 0,
+      "overlayWidth": 1,
+      "totalWidth": 5,
+      "out": "\u001b[0m\u001b]8;;\u0007x\u001b[0m\u001b]8;;\u0007    "
+    },
+    {
+      "base": "abcde",
+      "overlay": "X",
+      "startCol": 2,
+      "overlayWidth": 1,
+      "totalWidth": 5,
+      "out": "ab\u001b[0m\u001b]8;;\u0007X\u001b[0m\u001b]8;;\u0007de"
+    },
+    {
+      "base": "abc",
+      "overlay": "XY",
+      "startCol": 5,
+      "overlayWidth": 2,
+      "totalWidth": 8,
+      "out": "abc  \u001b[0m\u001b]8;;\u0007XY\u001b[0m\u001b]8;;\u0007 "
+    },
+    {
+      "base": "\u001b[31mabcdef\u001b[0m",
+      "overlay": "XY",
+      "startCol": 2,
+      "overlayWidth": 2,
+      "totalWidth": 6,
+      "out": "\u001b[31mab\u001b[0m\u001b]8;;\u0007XY\u001b[0m\u001b]8;;\u0007\u001b[31mef"
+    },
+    {
+      "base": "\u001b]8;;https://example.com\u0007abcdef\u001b]8;;\u0007",
+      "overlay": "Z",
+      "startCol": 3,
+      "overlayWidth": 1,
+      "totalWidth": 6,
+      "out": "\u001b]8;;https://example.com\u0007abc\u001b[0m\u001b]8;;\u0007Z\u001b[0m\u001b]8;;\u0007\u001b]8;;https://example.com\u0007ef"
+    },
+    {
+      "base": "a你b好c",
+      "overlay": "XY",
+      "startCol": 2,
+      "overlayWidth": 2,
+      "totalWidth": 7,
+      "out": "a \u001b[0m\u001b]8;;\u0007XY\u001b[0m\u001b]8;;\u0007好c"
+    },
+    {
+      "base": "abcdef",
+      "overlay": "你好",
+      "startCol": 1,
+      "overlayWidth": 3,
+      "totalWidth": 6,
+      "out": "a\u001b[0m\u001b]8;;\u0007你 \u001b[0m\u001b]8;;\u0007ef"
+    },
+    {
+      "base": "abcdef",
+      "overlay": "over-wide",
+      "startCol": 1,
+      "overlayWidth": 3,
+      "totalWidth": 6,
+      "out": "a\u001b[0m\u001b]8;;\u0007ove\u001b[0m\u001b]8;;\u0007ef"
+    },
+    {
+      "base": "\u001b_Ga=T,f=100;AAAA\u001b\\",
+      "overlay": "x",
+      "startCol": 0,
+      "overlayWidth": 1,
+      "totalWidth": 5,
+      "out": "\u001b_Ga=T,f=100;AAAA\u001b\\"
+    }
+  ],
+  "scrollTraces": [
+    {
+      "name": "follow-end",
+      "states": [
+        {
+          "label": "initial",
+          "scrollTop": 0,
+          "followingEnd": true,
+          "viewportHeight": 0,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 0
+        },
+        {
+          "label": "layout-10-3",
+          "scrollTop": 7,
+          "followingEnd": true,
+          "viewportHeight": 3,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 0
+        },
+        {
+          "label": "scroll-up-2",
+          "scrollTop": 5,
+          "followingEnd": false,
+          "viewportHeight": 3,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 1,
+          "unconsumed": 0
+        },
+        {
+          "label": "grow-12-3",
+          "scrollTop": 5,
+          "followingEnd": false,
+          "viewportHeight": 3,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 1
+        },
+        {
+          "label": "to-end",
+          "scrollTop": 9,
+          "followingEnd": true,
+          "viewportHeight": 3,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 2
+        },
+        {
+          "label": "grow-15-3",
+          "scrollTop": 12,
+          "followingEnd": true,
+          "viewportHeight": 3,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 2
+        }
+      ]
+    },
+    {
+      "name": "suppressed-follow",
+      "states": [
+        {
+          "label": "at-end",
+          "scrollTop": 7,
+          "followingEnd": true,
+          "viewportHeight": 3,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 0
+        },
+        {
+          "label": "suppress-at-end",
+          "scrollTop": 7,
+          "followingEnd": false,
+          "viewportHeight": 3,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 1
+        },
+        {
+          "label": "growth-stays-put",
+          "scrollTop": 7,
+          "followingEnd": false,
+          "viewportHeight": 3,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 1
+        },
+        {
+          "label": "explicit-end-restores-follow",
+          "scrollTop": 9,
+          "followingEnd": true,
+          "viewportHeight": 3,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 2
+        }
+      ]
+    },
+    {
+      "name": "bounds-and-shrink",
+      "states": [
+        {
+          "label": "initial",
+          "scrollTop": 0,
+          "followingEnd": false,
+          "viewportHeight": 2,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 0
+        },
+        {
+          "label": "past-start",
+          "scrollTop": 0,
+          "followingEnd": false,
+          "viewportHeight": 2,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 0,
+          "unconsumed": -4
+        },
+        {
+          "label": "past-end",
+          "scrollTop": 3,
+          "followingEnd": false,
+          "viewportHeight": 2,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 1,
+          "unconsumed": 7
+        },
+        {
+          "label": "content-shrinks",
+          "scrollTop": 0,
+          "followingEnd": false,
+          "viewportHeight": 2,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 1
+        }
+      ]
+    },
+    {
+      "name": "scrollbar-modes",
+      "states": [
+        {
+          "label": "initial",
+          "scrollTop": 0,
+          "followingEnd": false,
+          "viewportHeight": 3,
+          "scrollbar": "auto",
+          "scrollbarVisible": false,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 0
+        },
+        {
+          "label": "activity",
+          "scrollTop": 1,
+          "followingEnd": false,
+          "viewportHeight": 3,
+          "scrollbar": "auto",
+          "scrollbarVisible": true,
+          "scrollbarActive": false,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 1
+        },
+        {
+          "label": "active",
+          "scrollTop": 1,
+          "followingEnd": false,
+          "viewportHeight": 3,
+          "scrollbar": "auto",
+          "scrollbarVisible": true,
+          "scrollbarActive": true,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 2
+        },
+        {
+          "label": "always",
+          "scrollTop": 1,
+          "followingEnd": false,
+          "viewportHeight": 3,
+          "scrollbar": "always",
+          "scrollbarVisible": true,
+          "scrollbarActive": true,
+          "contentWidth1": 1,
+          "contentWidth5": 4,
+          "renderRequests": 3
+        },
+        {
+          "label": "hidden",
+          "scrollTop": 1,
+          "followingEnd": false,
+          "viewportHeight": 3,
+          "scrollbar": "hidden",
+          "scrollbarVisible": false,
+          "scrollbarActive": true,
+          "contentWidth1": 1,
+          "contentWidth5": 5,
+          "renderRequests": 4
+        }
+      ]
+    }
+  ],
+  "layouts": [
+    {
+      "name": "leaf-cursor-clipping",
+      "width": 5,
+      "height": 2,
+      "lines": [
+        "two",
+        "three\u001b_midas:c\u0007"
+      ],
+      "primaryScrollViewId": "",
+      "root": {
+        "id": "cursor-leaf",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 5,
+          "height": 2
+        },
+        "clip": {
+          "x": 0,
+          "y": 0,
+          "width": 5,
+          "height": 2
+        },
+        "lineOffset": 2,
+        "lines": [
+          "zero",
+          "one",
+          "two",
+          "three\u001b_midas:c\u0007"
+        ],
+        "scrollViewId": "",
+        "layer": 0,
+        "children": []
+      },
+      "hits": [
+        "cursor-leaf"
+      ]
+    },
+    {
+      "name": "vstack-allocation",
+      "width": 6,
+      "height": 5,
+      "lines": [
+        "a0",
+        "",
+        "b0",
+        "",
+        ""
+      ],
+      "primaryScrollViewId": "",
+      "root": {
+        "id": "v-root",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 6,
+          "height": 5
+        },
+        "clip": {
+          "x": 0,
+          "y": 0,
+          "width": 6,
+          "height": 5
+        },
+        "lineOffset": 0,
+        "lines": null,
+        "scrollViewId": "",
+        "layer": 0,
+        "children": [
+          {
+            "id": "v-a",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 6,
+              "height": 1
+            },
+            "clip": {
+              "x": 0,
+              "y": 0,
+              "width": 6,
+              "height": 1
+            },
+            "lineOffset": 0,
+            "lines": [
+              "a0",
+              "a1",
+              "a2"
+            ],
+            "scrollViewId": "",
+            "layer": 0,
+            "children": []
+          },
+          {
+            "id": "v-b",
+            "rect": {
+              "x": 0,
+              "y": 2,
+              "width": 6,
+              "height": 3
+            },
+            "clip": {
+              "x": 0,
+              "y": 2,
+              "width": 6,
+              "height": 3
+            },
+            "lineOffset": 0,
+            "lines": [
+              "b0"
+            ],
+            "scrollViewId": "",
+            "layer": 0,
+            "children": []
+          }
+        ]
+      },
+      "hits": [
+        "v-b",
+        "v-root"
+      ]
+    },
+    {
+      "name": "hstack-alignment",
+      "width": 8,
+      "height": 4,
+      "lines": [
+        "\u001b[0m\u001b]8;;\u0007a0 \u001b[0m\u001b]8;;\u0007     ",
+        "\u001b[0m\u001b]8;;\u0007a1 \u001b[0m\u001b]8;;\u0007 \u001b[0m\u001b]8;;\u0007b0  \u001b[0m\u001b]8;;\u0007",
+        "\u001b[0m\u001b]8;;\u0007a2 \u001b[0m\u001b]8;;\u0007     ",
+        ""
+      ],
+      "primaryScrollViewId": "",
+      "root": {
+        "id": "h-root",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 8,
+          "height": 4
+        },
+        "clip": {
+          "x": 0,
+          "y": 0,
+          "width": 8,
+          "height": 4
+        },
+        "lineOffset": 0,
+        "lines": null,
+        "scrollViewId": "",
+        "layer": 0,
+        "children": [
+          {
+            "id": "h-a",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 3,
+              "height": 3
+            },
+            "clip": {
+              "x": 0,
+              "y": 0,
+              "width": 3,
+              "height": 3
+            },
+            "lineOffset": 0,
+            "lines": [
+              "a0",
+              "a1",
+              "a2"
+            ],
+            "scrollViewId": "",
+            "layer": 0,
+            "children": []
+          },
+          {
+            "id": "h-b",
+            "rect": {
+              "x": 4,
+              "y": 1,
+              "width": 4,
+              "height": 1
+            },
+            "clip": {
+              "x": 4,
+              "y": 1,
+              "width": 4,
+              "height": 1
+            },
+            "lineOffset": 0,
+            "lines": [
+              "b0"
+            ],
+            "scrollViewId": "",
+            "layer": 0,
+            "children": []
+          }
+        ]
+      },
+      "hits": [
+        "h-b",
+        "h-root"
+      ]
+    },
+    {
+      "name": "scrollbar-always",
+      "width": 8,
+      "height": 3,
+      "lines": [
+        "\u001b[0m\u001b]8;;\u0007row0   \u001b[0m\u001b]8;;\u0007\u001b[37m┃\u001b[39m",
+        "\u001b[0m\u001b]8;;\u0007row1   \u001b[0m\u001b]8;;\u0007\u001b[37m┃\u001b[39m",
+        "\u001b[0m\u001b]8;;\u0007row2   \u001b[0m\u001b]8;;\u0007\u001b[90m│\u001b[39m"
+      ],
+      "primaryScrollViewId": "scroll-always",
+      "root": {
+        "id": "scroll-always",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 8,
+          "height": 3
+        },
+        "clip": {
+          "x": 0,
+          "y": 0,
+          "width": 8,
+          "height": 3
+        },
+        "lineOffset": 0,
+        "lines": null,
+        "scrollViewId": "scroll-always",
+        "layer": 0,
+        "children": [
+          {
+            "id": "scroll-child",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 7,
+              "height": 6
+            },
+            "clip": {
+              "x": 0,
+              "y": 0,
+              "width": 7,
+              "height": 3
+            },
+            "lineOffset": 0,
+            "lines": [
+              "row0",
+              "row1",
+              "row2",
+              "row3",
+              "row4",
+              "row5"
+            ],
+            "scrollViewId": "",
+            "layer": 0,
+            "children": []
+          }
+        ]
+      },
+      "geometry": {
+        "column": 7,
+        "trackTop": 0,
+        "trackHeight": 3,
+        "thumbTop": 0,
+        "thumbHeight": 2,
+        "maxScrollTop": 3
+      },
+      "scrollViewsAt": [
+        "scroll-always"
+      ]
+    },
+    {
+      "name": "scroll-offset",
+      "width": 6,
+      "height": 2,
+      "lines": [
+        "row2",
+        "row3"
+      ],
+      "primaryScrollViewId": "scroll-offset",
+      "root": {
+        "id": "scroll-offset",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 6,
+          "height": 2
+        },
+        "clip": {
+          "x": 0,
+          "y": 0,
+          "width": 6,
+          "height": 2
+        },
+        "lineOffset": 0,
+        "lines": null,
+        "scrollViewId": "scroll-offset",
+        "layer": 0,
+        "children": [
+          {
+            "id": "offset-child",
+            "rect": {
+              "x": 0,
+              "y": -2,
+              "width": 6,
+              "height": 5
+            },
+            "clip": {
+              "x": 0,
+              "y": 0,
+              "width": 6,
+              "height": 2
+            },
+            "lineOffset": 0,
+            "lines": [
+              "row0",
+              "row1",
+              "row2",
+              "row3",
+              "row4"
+            ],
+            "scrollViewId": "",
+            "layer": 0,
+            "children": []
+          }
+        ]
+      },
+      "scrollTop": 2,
+      "hits": [
+        "offset-child",
+        "scroll-offset"
+      ]
+    },
+    {
+      "name": "strip-leading-osc133",
+      "width": 10,
+      "height": 1,
+      "lines": [
+        "visible"
+      ],
+      "primaryScrollViewId": "",
+      "root": {
+        "id": "zone-leaf",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 10,
+          "height": 1
+        },
+        "clip": {
+          "x": 0,
+          "y": 0,
+          "width": 10,
+          "height": 1
+        },
+        "lineOffset": 0,
+        "lines": [
+          "\u001b]133;A\u0007\u001b]133;B\u001b\\visible"
+        ],
+        "scrollViewId": "",
+        "layer": 0,
+        "children": []
+      }
+    },
+    {
+      "name": "render-cache",
+      "width": 5,
+      "height": 2,
+      "lines": [
+        "same",
+        "same"
+      ],
+      "primaryScrollViewId": "",
+      "root": {
+        "id": "cache-root",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 5,
+          "height": 2
+        },
+        "clip": {
+          "x": 0,
+          "y": 0,
+          "width": 5,
+          "height": 2
+        },
+        "lineOffset": 0,
+        "lines": null,
+        "scrollViewId": "",
+        "layer": 0,
+        "children": [
+          {
+            "id": "shared",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 5,
+              "height": 1
+            },
+            "clip": {
+              "x": 0,
+              "y": 0,
+              "width": 5,
+              "height": 1
+            },
+            "lineOffset": 0,
+            "lines": [
+              "same"
+            ],
+            "scrollViewId": "",
+            "layer": 0,
+            "children": []
+          },
+          {
+            "id": "shared",
+            "rect": {
+              "x": 0,
+              "y": 1,
+              "width": 5,
+              "height": 1
+            },
+            "clip": {
+              "x": 0,
+              "y": 1,
+              "width": 5,
+              "height": 1
+            },
+            "lineOffset": 0,
+            "lines": [
+              "same"
+            ],
+            "scrollViewId": "",
+            "layer": 0,
+            "children": []
+          }
+        ]
+      },
+      "renderWidths": [
+        5
+      ]
+    },
+    {
+      "name": "viewport-clamp",
+      "width": 1,
+      "height": 1,
+      "lines": [
+        "over"
+      ],
+      "primaryScrollViewId": "",
+      "root": {
+        "id": "clamp-leaf",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "clip": {
+          "x": 0,
+          "y": 0,
+          "width": 1,
+          "height": 1
+        },
+        "lineOffset": 0,
+        "lines": [
+          "over"
+        ],
+        "scrollViewId": "",
+        "layer": 0,
+        "children": []
+      }
+    },
+    {
+      "name": "kitty-image-crop",
+      "width": 4,
+      "height": 1,
+      "lines": [
+        "\u001b_Ga=T,i=42,c=4,y=0,h=10,r=1;AAAA\u001b\\"
+      ],
+      "primaryScrollViewId": "",
+      "root": {
+        "id": "image-leaf",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 4,
+          "height": 1
+        },
+        "clip": {
+          "x": 0,
+          "y": 0,
+          "width": 4,
+          "height": 1
+        },
+        "lineOffset": 0,
+        "lines": [
+          "\u001b_Ga=T,i=42,c=4,r=3;AAAA\u001b\\"
+        ],
+        "scrollViewId": "",
+        "layer": 0,
+        "children": []
+      }
+    }
+  ],
+  "terminalColorInputs": [
+    {
+      "data": "",
+      "isOsc11": false,
+      "colorFound": false,
+      "color": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "schemeFound": false,
+      "scheme": ""
+    },
+    {
+      "data": "\u001b]11;#112233\u0007",
+      "isOsc11": true,
+      "colorFound": true,
+      "color": {
+        "r": 17,
+        "g": 34,
+        "b": 51
+      },
+      "schemeFound": false,
+      "scheme": ""
+    },
+    {
+      "data": "\u001b]11; #abcdef \u001b\\",
+      "isOsc11": true,
+      "colorFound": true,
+      "color": {
+        "r": 171,
+        "g": 205,
+        "b": 239
+      },
+      "schemeFound": false,
+      "scheme": ""
+    },
+    {
+      "data": "\u001b]11;#111122223333\u0007",
+      "isOsc11": true,
+      "colorFound": true,
+      "color": {
+        "r": 17,
+        "g": 34,
+        "b": 51
+      },
+      "schemeFound": false,
+      "scheme": ""
+    },
+    {
+      "data": "\u001b]11;rgb:f/00/8000\u0007",
+      "isOsc11": true,
+      "colorFound": true,
+      "color": {
+        "r": 255,
+        "g": 0,
+        "b": 128
+      },
+      "schemeFound": false,
+      "scheme": ""
+    },
+    {
+      "data": "\u001b]11;rgba:ffff/8000/0000/ffff\u0007",
+      "isOsc11": true,
+      "colorFound": true,
+      "color": {
+        "r": 255,
+        "g": 128,
+        "b": 0
+      },
+      "schemeFound": false,
+      "scheme": ""
+    },
+    {
+      "data": "\u001b]11;#bad\u0007",
+      "isOsc11": true,
+      "colorFound": false,
+      "color": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "schemeFound": false,
+      "scheme": ""
+    },
+    {
+      "data": "\u001b]11;rgb:zz/00/00\u0007",
+      "isOsc11": true,
+      "colorFound": false,
+      "color": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "schemeFound": false,
+      "scheme": ""
+    },
+    {
+      "data": "\u001b]11;#112233",
+      "isOsc11": false,
+      "colorFound": false,
+      "color": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "schemeFound": false,
+      "scheme": ""
+    },
+    {
+      "data": "\u001b[?997;1n",
+      "isOsc11": false,
+      "colorFound": false,
+      "color": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "schemeFound": true,
+      "scheme": "dark"
+    },
+    {
+      "data": "\u001b[?997;2n",
+      "isOsc11": false,
+      "colorFound": false,
+      "color": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "schemeFound": true,
+      "scheme": "light"
+    },
+    {
+      "data": "\u001b[?997;1n\u001b[?997;2n",
+      "isOsc11": false,
+      "colorFound": false,
+      "color": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "schemeFound": true,
+      "scheme": "light"
+    },
+    {
+      "data": "prefix\u001b[?997;1n",
+      "isOsc11": false,
+      "colorFound": false,
+      "color": {
+        "r": 0,
+        "g": 0,
+        "b": 0
+      },
+      "schemeFound": false,
+      "scheme": ""
+    }
+  ],
+  "keyInputs": [
+    {
+      "data": "plain",
+      "release": false,
+      "debug": false
+    },
+    {
+      "data": "\u001b[100;6u",
+      "release": false,
+      "debug": true
+    },
+    {
+      "data": "\u001b[68;6u",
+      "release": false,
+      "debug": true
+    },
+    {
+      "data": "\u001b[100;6:3u",
+      "release": true,
+      "debug": true
+    },
+    {
+      "data": "\u001b[27;6;100~",
+      "release": false,
+      "debug": true
+    },
+    {
+      "data": "\u001b[100;5u",
+      "release": false,
+      "debug": false
+    },
+    {
+      "data": "\u001b[200~90:62:3F:A5\u001b[201~",
+      "release": false,
+      "debug": false
+    },
+    {
+      "data": "\u001b[65;2:3u",
+      "release": true,
+      "debug": false
+    },
+    {
+      "data": "\u001b[1;2:3A",
+      "release": true,
+      "debug": false
+    }
+  ],
+  "overlays": [
+    {
+      "name": "default-center",
+      "out": [
+        "base",
+        "",
+        "",
+        "",
+        "\u001b[0m\u001b]8;;\u0007one                 \u001b[0m\u001b]8;;\u0007",
+        "\u001b[0m\u001b]8;;\u0007two                 \u001b[0m\u001b]8;;\u0007",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "boundsFound": true,
+      "bounds": {
+        "row": 4,
+        "col": 0,
+        "width": 20,
+        "height": 2
+      },
+      "focusId": "default-center-overlay",
+      "focused": true,
+      "renderWidths": [
+        20
+      ]
+    },
+    {
+      "name": "top-left-margin",
+      "out": [
+        "base",
+        "  \u001b[0m\u001b]8;;\u0007x       \u001b[0m\u001b]8;;\u0007          ",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "boundsFound": true,
+      "bounds": {
+        "row": 1,
+        "col": 2,
+        "width": 8,
+        "height": 1
+      },
+      "focusId": "top-left-margin-overlay",
+      "focused": true,
+      "renderWidths": [
+        8
+      ]
+    },
+    {
+      "name": "percent-and-max-height",
+      "out": [
+        "base",
+        "               \u001b[0m\u001b]8;;\u00070              \u001b[0m\u001b]8;;\u0007",
+        "               \u001b[0m\u001b]8;;\u00071              \u001b[0m\u001b]8;;\u0007",
+        "               \u001b[0m\u001b]8;;\u00072              \u001b[0m\u001b]8;;\u0007",
+        "               \u001b[0m\u001b]8;;\u00073              \u001b[0m\u001b]8;;\u0007",
+        "               \u001b[0m\u001b]8;;\u00074              \u001b[0m\u001b]8;;\u0007",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "boundsFound": true,
+      "bounds": {
+        "row": 1,
+        "col": 15,
+        "width": 15,
+        "height": 5
+      },
+      "focusId": "percent-and-max-height-overlay",
+      "focused": true,
+      "renderWidths": [
+        15
+      ]
+    },
+    {
+      "name": "invalid-percent-centers",
+      "out": [
+        "base",
+        "",
+        "",
+        "",
+        "\u001b[0m\u001b]8;;\u0007x                   \u001b[0m\u001b]8;;\u0007",
+        "\u001b[0m\u001b]8;;\u0007y                   \u001b[0m\u001b]8;;\u0007",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "boundsFound": true,
+      "bounds": {
+        "row": 4,
+        "col": 0,
+        "width": 20,
+        "height": 2
+      },
+      "focusId": "invalid-percent-centers-overlay",
+      "focused": true,
+      "renderWidths": [
+        20
+      ]
+    },
+    {
+      "name": "offsets-clamp",
+      "out": [
+        "base",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "              \u001b[0m\u001b]8;;\u0007x     \u001b[0m\u001b]8;;\u0007",
+        "              \u001b[0m\u001b]8;;\u0007y     \u001b[0m\u001b]8;;\u0007",
+        "              \u001b[0m\u001b]8;;\u0007z     \u001b[0m\u001b]8;;\u0007"
+      ],
+      "boundsFound": true,
+      "bounds": {
+        "row": 7,
+        "col": 14,
+        "width": 6,
+        "height": 3
+      },
+      "focusId": "offsets-clamp-overlay",
+      "focused": true,
+      "renderWidths": [
+        6
+      ]
+    },
+    {
+      "name": "empty",
+      "out": [
+        "base",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "boundsFound": true,
+      "bounds": {
+        "row": 5,
+        "col": 0,
+        "width": 20,
+        "height": 0
+      },
+      "focusId": "empty-overlay",
+      "focused": true,
+      "renderWidths": [
+        20
+      ]
+    },
+    {
+      "name": "long-base-bottom",
+      "out": [
+        "base0",
+        "base1",
+        "base2",
+        "base3",
+        "base4",
+        "base5",
+        "base6",
+        "base7",
+        "base8",
+        "base9",
+        "base10",
+        "\u001b[0m\u001b]8;;\u0007bottom  \u001b[0m\u001b]8;;\u0007    "
+      ],
+      "boundsFound": true,
+      "bounds": {
+        "row": 4,
+        "col": 0,
+        "width": 8,
+        "height": 1
+      },
+      "focusId": "long-base-bottom-overlay",
+      "focused": true,
+      "renderWidths": [
+        8
+      ]
+    },
+    {
+      "name": "defensive-truncate",
+      "out": [
+        "\u001b[0m\u001b]8;;\u0007over-\u001b[0m\u001b]8;;\u0007     ",
+        "",
+        "",
+        ""
+      ],
+      "boundsFound": true,
+      "bounds": {
+        "row": 0,
+        "col": 0,
+        "width": 5,
+        "height": 1
+      },
+      "focusId": "defensive-truncate-overlay",
+      "focused": true,
+      "renderWidths": [
+        5
+      ]
+    },
+    {
+      "name": "hidden",
+      "out": [
+        "base",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "boundsFound": false,
+      "bounds": {
+        "row": 0,
+        "col": 0,
+        "width": 0,
+        "height": 0
+      },
+      "focusId": "",
+      "focused": false,
+      "renderWidths": []
+    },
+    {
+      "name": "dynamic-invisible",
+      "out": [
+        "base",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "boundsFound": false,
+      "bounds": {
+        "row": 0,
+        "col": 0,
+        "width": 0,
+        "height": 0
+      },
+      "focusId": "",
+      "focused": false,
+      "renderWidths": []
+    }
+  ],
+  "focusTraces": [
+    {
+      "name": "stack-and-noncapturing",
+      "states": [
+        {
+          "label": "base",
+          "focusId": "base",
+          "focused": {
+            "base": true,
+            "one": false,
+            "two": false
+          },
+          "hasOverlay": false,
+          "hidden": {}
+        },
+        {
+          "label": "show-one",
+          "focusId": "one",
+          "focused": {
+            "base": false,
+            "one": true,
+            "two": false
+          },
+          "hasOverlay": true,
+          "hidden": {
+            "one": false
+          }
+        },
+        {
+          "label": "show-noncapturing-two",
+          "focusId": "one",
+          "focused": {
+            "base": false,
+            "one": true,
+            "two": false
+          },
+          "hasOverlay": true,
+          "hidden": {
+            "one": false,
+            "two": false
+          }
+        },
+        {
+          "label": "explicit-focus-two",
+          "focusId": "two",
+          "focused": {
+            "base": false,
+            "one": false,
+            "two": true
+          },
+          "hasOverlay": true,
+          "hidden": {
+            "one": false,
+            "two": false
+          }
+        },
+        {
+          "label": "hide-two",
+          "focusId": "one",
+          "focused": {
+            "base": false,
+            "one": true,
+            "two": false
+          },
+          "hasOverlay": true,
+          "hidden": {
+            "one": false
+          }
+        },
+        {
+          "label": "hide-last",
+          "focusId": "base",
+          "focused": {
+            "base": true,
+            "one": false,
+            "two": false
+          },
+          "hasOverlay": false,
+          "hidden": {}
+        }
+      ]
+    },
+    {
+      "name": "blocked-restore",
+      "states": [
+        {
+          "label": "overlay",
+          "focusId": "overlay",
+          "focused": {
+            "base": false,
+            "blocker": false,
+            "overlay": true
+          },
+          "hasOverlay": true,
+          "hidden": {}
+        },
+        {
+          "label": "blocked",
+          "focusId": "blocker",
+          "focused": {
+            "base": false,
+            "blocker": true,
+            "overlay": false
+          },
+          "hasOverlay": true,
+          "hidden": {}
+        },
+        {
+          "label": "nil-restores",
+          "focusId": "overlay",
+          "focused": {
+            "base": false,
+            "blocker": false,
+            "overlay": true
+          },
+          "hasOverlay": true,
+          "hidden": {}
+        },
+        {
+          "label": "explicit-target-pending",
+          "focusId": "blocker",
+          "focused": {
+            "base": false,
+            "blocker": true,
+            "overlay": false
+          },
+          "hasOverlay": true,
+          "hidden": {}
+        },
+        {
+          "label": "explicit-target-resolves",
+          "focusId": "base",
+          "focused": {
+            "base": true,
+            "blocker": false,
+            "overlay": false
+          },
+          "hasOverlay": true,
+          "hidden": {}
+        }
+      ]
+    },
+    {
+      "name": "dynamic-visibility",
+      "states": [
+        {
+          "label": "visible",
+          "focusId": "overlay",
+          "focused": {
+            "base": false,
+            "overlay": true
+          },
+          "hasOverlay": true,
+          "hidden": {
+            "overlay": false
+          }
+        },
+        {
+          "label": "input-repairs-hidden",
+          "focusId": "base",
+          "focused": {
+            "base": true,
+            "overlay": false
+          },
+          "hasOverlay": false,
+          "hidden": {
+            "overlay": false
+          }
+        },
+        {
+          "label": "input-restores-visible",
+          "focusId": "overlay",
+          "focused": {
+            "base": false,
+            "overlay": true
+          },
+          "hasOverlay": true,
+          "hidden": {
+            "overlay": false
+          }
+        }
+      ]
+    }
+  ],
+  "cursorAndResets": [
+    {
+      "name": "bottom-visible-cursor",
+      "cursorFound": true,
+      "cursor": {
+        "row": 2,
+        "col": 3
+      },
+      "lines": [
+        "old\u001b_midas:c\u0007",
+        "middle",
+        "\u001b[31mnew\u001b[0m"
+      ],
+      "resetLines": [
+        "a   b\u001b[0m\u001b]8;;\u0007",
+        "\u001b_Ga=T;AAAA\u001b\\"
+      ]
+    }
+  ],
+  "baseInputTraces": [
+    {
+      "name": "priority-and-transforms",
+      "listenerLog": [
+        "one:x",
+        "two:x-one",
+        "one:empty",
+        "two:",
+        "one:consume",
+        "two:consume-one",
+        "one:\u001b[97;1:3u",
+        "two:\u001b[97;1:3u-one",
+        "one:\u001b[97;1:3u",
+        "two:\u001b[97;1:3u-one",
+        "one:\u001b[100;6u",
+        "two:\u001b[100;6u-one",
+        "one:\u001b[6;18;9t",
+        "two:\u001b[6;18;9t-one"
+      ],
+      "inputs": [
+        "x-one-two",
+        "-two",
+        "\u001b[97;1:3u-one-two",
+        "\u001b[100;6u-one-two",
+        "\u001b[6;18;9t-one-two"
+      ],
+      "invalidations": 0,
+      "debugCount": 0,
+      "schemes": [
+        "light",
+        "dark"
+      ],
+      "cellDimensions": {
+        "widthPx": 9,
+        "heightPx": 18
+      },
+      "backgroundFound": true,
+      "background": {
+        "r": 255,
+        "g": 0,
+        "b": 128
+      },
+      "queriedSchemeFound": true,
+      "queriedScheme": "dark",
+      "terminalLog": [
+        "write:\u001b]11;?\u0007",
+        "write:\u001b[?996n"
+      ]
+    }
+  ],
+  "lifecycle": [
+    {
+      "name": "start-render-stop",
+      "log": [
+        "write:\u001b[?2031h",
+        "hook:beforeStart",
+        "start",
+        "hook:afterStart",
+        "hideCursor",
+        "write:\u001b[?2031h",
+        "write:\u001b[16t",
+        "hook:reset",
+        "hook:render",
+        "write:\u001b[?2031l",
+        "hook:beforeStop:true",
+        "showCursor",
+        "stop",
+        "hook:afterStop:true"
+      ],
+      "renders": 1
+    }
+  ]
+}

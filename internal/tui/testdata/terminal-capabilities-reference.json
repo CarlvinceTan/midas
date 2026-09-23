@@ -1,0 +1,179 @@
+{
+  "cases": [
+    {
+      "name": "unknown",
+      "env": {
+        "COLORTERM": "truecolor"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "",
+        "trueColor": true,
+        "hyperlinks": false
+      }
+    },
+    {
+      "name": "tmux-hyperlinks",
+      "env": {
+        "TMUX": "1",
+        "COLORTERM": "24bit"
+      },
+      "tmuxHyperlinks": true,
+      "result": {
+        "images": "",
+        "trueColor": true,
+        "hyperlinks": true
+      }
+    },
+    {
+      "name": "tmux-no-hyperlinks",
+      "env": {
+        "TERM": "tmux-256color"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "",
+        "trueColor": false,
+        "hyperlinks": false
+      }
+    },
+    {
+      "name": "screen",
+      "env": {
+        "TERM": "screen-256color",
+        "COLORTERM": "truecolor"
+      },
+      "tmuxHyperlinks": true,
+      "result": {
+        "images": "",
+        "trueColor": true,
+        "hyperlinks": false
+      }
+    },
+    {
+      "name": "kitty",
+      "env": {
+        "KITTY_WINDOW_ID": "1"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "kitty",
+        "trueColor": true,
+        "hyperlinks": true
+      }
+    },
+    {
+      "name": "ghostty",
+      "env": {
+        "TERM_PROGRAM": "ghostty"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "kitty",
+        "trueColor": true,
+        "hyperlinks": true
+      }
+    },
+    {
+      "name": "wezterm",
+      "env": {
+        "WEZTERM_PANE": "1"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "kitty",
+        "trueColor": true,
+        "hyperlinks": true
+      }
+    },
+    {
+      "name": "warp",
+      "env": {
+        "WARP_SESSION_ID": "1"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "kitty",
+        "trueColor": true,
+        "hyperlinks": true
+      }
+    },
+    {
+      "name": "iterm",
+      "env": {
+        "TERM_PROGRAM": "iTerm.app"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "iterm2",
+        "trueColor": true,
+        "hyperlinks": true
+      }
+    },
+    {
+      "name": "windows-terminal",
+      "env": {
+        "WT_SESSION": "1"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "",
+        "trueColor": true,
+        "hyperlinks": true
+      }
+    },
+    {
+      "name": "alacritty",
+      "env": {
+        "TERM_PROGRAM": "Alacritty"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "",
+        "trueColor": true,
+        "hyperlinks": true
+      }
+    },
+    {
+      "name": "jetbrains",
+      "env": {
+        "TERMINAL_EMULATOR": "JetBrains-JediTerm"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "",
+        "trueColor": true,
+        "hyperlinks": false
+      }
+    },
+    {
+      "name": "overrides",
+      "env": {
+        "TERM_PROGRAM": "kitty",
+        "MIDAS_IMAGE_PROTOCOL": "none",
+        "MIDAS_TRUE_COLOR": "0",
+        "MIDAS_HYPERLINKS": "0"
+      },
+      "tmuxHyperlinks": true,
+      "result": {
+        "images": "",
+        "trueColor": false,
+        "hyperlinks": false
+      }
+    },
+    {
+      "name": "force-images",
+      "env": {
+        "MIDAS_IMAGE_PROTOCOL": "iterm2",
+        "MIDAS_TRUE_COLOR": "1",
+        "MIDAS_HYPERLINKS": "1"
+      },
+      "tmuxHyperlinks": false,
+      "result": {
+        "images": "iterm2",
+        "trueColor": true,
+        "hyperlinks": true
+      }
+    }
+  ]
+}
