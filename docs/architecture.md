@@ -1,7 +1,7 @@
 # Architecture
 
-`pkg/` is the reusable core, `internal/` is Midas itself, `api/` holds interface
-definitions, and `cmd/` holds the two binaries.
+`pkg/` is the reusable core, `internal/` is Midas itself, and `cmd/` holds the
+binaries.
 
 ## Layout
 
@@ -9,18 +9,12 @@ definitions, and `cmd/` holds the two binaries.
 cmd/mock-bridge             reference bridge for the hub
 cmd/hub                  local homeserver over MCP
 cmd/midas                interactive terminal client
-cmd/server               the multi-agent environment: many agents, shared MCP pool, browser, user API
-cmd/manager              many server deployments, one per user
 pkg/ai                   messages, models, streams, usage, provider adapters
 pkg/agent                loop: events, steering, tools, compaction, cache warming
 pkg/control              desktop and browser state, and acting on a surface
 pkg/control/cdp          Chromium/Firefox debugging endpoints
 pkg/hub                  optional local homeserver: bridges, store, MCP surface
-pkg/protocol             agent API contract: records, requests, routes
 pkg/vault                KeePass-compatible secrets: passwords, TOTP, recovery codes
-internal/api             HTTP surface for that contract
-internal/server          the multi-agent environment: bus, agents, leases, setup, API
-internal/manager         per-user deployment provisioning and process control
 internal/chat            chat session runtime: turns, steering, title and status helpers
 internal/mcp             MCP servers: config discovery, connections, tool adapters
 internal/provider        provider and credential resolution, model discovery
@@ -28,35 +22,21 @@ internal/storage         session store: transcripts, drafts, queues
 internal/tui             terminal UI
 internal/                goal, instructions, profiles, remote, settings, skills,
                          stats, storage, tools, voice, and the entry points above
-api/openapi.yaml         control plane
-api/events.schema.json   record stream
 ```
 
 ## Dependency direction
 
 ```text
-cmd/midas  ──> internal/tui, internal/chat
-cmd/server ──> internal/api ──> pkg/protocol
-                           └──> internal/chat ──> pkg/agent ──> pkg/ai
+cmd/midas  ──> internal/tui, internal/chat ──> pkg/agent ──> pkg/ai
 ```
 
-- `pkg/` never imports `internal/`. The core embeds on its own, and `cmd/server`
-  is the smallest proof of that.
+- `pkg/` never imports `internal/`, so the core embeds on its own.
 - `pkg/agent` knows nothing about Midas: no profiles, no provider catalog, no UI.
-- `pkg/protocol` imports no transport, so one contract serves the stdout stream
-  and the HTTP server.
 - `pkg/hub` is independent of the agent: it imports nothing from `internal/`, and
-  nothing in `cmd/midas` or `cmd/server` imports it, so the agent binaries never
-  link it or its dependencies. It is reached over MCP, by configuration alone.
+  nothing in `cmd/midas` imports it, so the agent binaries never link it or its
+  dependencies. It is reached over MCP, by configuration alone.
 - `internal/chat` is the only package that composes an agent, a session, tools,
   goals, MCP, and compaction into something an interface can drive.
-
-## Contract
-
-`pkg/protocol` is the source of truth. `api/openapi.yaml` and
-`api/events.schema.json` describe it for callers that are not written in Go, and
-tests fail when they disagree: a record type the schema omits, a route
-`ControlRoutes()` does not declare, or a route the server does not serve.
 
 ## Data ownership
 
@@ -127,25 +107,7 @@ docker build -f e2e/Dockerfile -t midas-e2e .
 docker run --rm midas-e2e
 ```
 
-That image is a Linux box with the Go toolchain and a Chromium, which is also the
-shape a server deployment has.
-
-## Server configuration and reload
-
-A server environment reads `server.json` at startup and applies it again when asked:
-`POST /v1/reload`, or `SIGHUP` to the process. A reload is applied to the running
-agents rather than replacing them:
-
-- an agent whose model, prompt, or role changed takes the new brain on its **next
-  message**, so a turn in flight is never changed underneath it;
-- an agent added to the file starts and is reachable immediately;
-- an agent removed from the file stops, cancelling the turn in flight;
-- a file that cannot be read, or an entry whose model cannot be resolved, changes
-  nothing: the reload reports what it refused and the running agents keep working.
-
-`PUT /v1/agents/{address}/settings` validates the new settings by building them
-first, writes them, and applies them, so editing an agent no longer waits for a
-restart.
+That image is a Linux box with the Go toolchain and a Chromium.
 
 ## Agent model and reasoning
 

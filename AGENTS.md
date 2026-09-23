@@ -1,19 +1,18 @@
 # Working on Midas
 
 Native Go coding agent. `pkg/` is the reusable core (`ai`, `agent`), everything
-Midas-specific is under `internal/`, and `cmd/` holds the two binaries: `midas`
-(TUI) and `midas-server` (headless).
+Midas-specific is under `internal/`, and `cmd/midas` is the interactive terminal
+client.
 Do not edit this instruction file unless explicitly asked.
 
 ## Build and install
 
-`midas` and `midas-server` on `PATH` are `~/.local/bin/*`, built from this
-checkout, so a change is not finished until they are rebuilt:
+`midas` on `PATH` is `~/.local/bin/midas`, built from this checkout, so a change
+is not finished until it is rebuilt:
 
 ```sh
 go test ./... && go vet ./...
 go build -o "$TMPDIR/midas" ./cmd/midas && mv -f "$TMPDIR/midas" "$HOME/.local/bin/midas"
-go build -o "$TMPDIR/midas-server" ./cmd/server && mv -f "$TMPDIR/midas-server" "$HOME/.local/bin/midas-server"
 ```
 
 - Never install a build whose tests have not run. `go install` writes to
